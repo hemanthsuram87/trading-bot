@@ -138,29 +138,12 @@ def is_market_open():
 # ========================
 def start_scheduler():
     log_message(" Scheduler started. Bot will run every 10 minutes during market hours.")
-    send_message("Trading bot started and running.")
-    while True:
-        if is_market_open():
-            run_trading_bot()
-            log_message(f" Sleeping for {INTERVAL_MINUTES} minutes...")
-            time.sleep(INTERVAL_MINUTES * 60)
-        else:
-            # Sleep until next market open
-            now = datetime.datetime.now()
-            if now.weekday() >= 5:  # Weekend
-                days_until_monday = 7 - now.weekday()
-                next_open = datetime.datetime.combine(
-                    now.date() + datetime.timedelta(days=days_until_monday),
-                    datetime.time(9, 30)
-                )
-            elif now.time() < datetime.time(9, 30):
-                next_open = datetime.datetime.combine(now.date(), datetime.time(9, 30))
-            else:  # After 16:00
-                next_open = datetime.datetime.combine(now.date() + datetime.timedelta(days=1), datetime.time(9, 30))
-
-            sleep_seconds = (next_open - now).total_seconds()
-            log_message(f"Market closed. Sleeping until next open at {next_open}...")
-            time.sleep(sleep_seconds)
+    send_message("Bot started and check if market is opne ")
+    if is_market_open():
+        run_trading_bot()
+    else:
+        log_message("Market is currently closed ")
+        print(f"Market is currently closed {datetime.datetime.now()}")
 # ========================
 #  Entry Point
 # ========================
