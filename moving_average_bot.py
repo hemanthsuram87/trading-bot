@@ -11,22 +11,23 @@ import pywhatkit
 #  Configuration
 # ========================
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRT4_URyoGfO4JMnHf7GJ3be442ItRj9zh--Cr904jmuwsybqna1cT6KauoaCryefurCnf18HBniFqh/pub?output=csv"
-LOG_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_FILE = os.path.join(LOG_DIR, f"trading_log_{datetime.date.today()}.txt")
+LOG_DIR = "logs"
+
+# Ensure log folder exists
+os.makedirs(LOG_DIR, exist_ok=True)
+
+# Create log file per day
+log_filename = os.path.join(LOG_DIR, f"log_{datetime.date.today()}.txt")
+
+def log_message(msg: str):
+    """Log message to both console and file."""
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    full_msg = f"[{timestamp}] {msg}"
+    print(full_msg)
+    with open(log_filename, "a", encoding="utf-8") as f:
+        f.write(full_msg + "\n")
 
 INTERVAL_MINUTES = 10  # Run every 10 minutes
-
-# ========================
-#  Logging helper
-# ========================
-def log_message(message):
-    """Log messages to daily log file with timestamp"""
-    timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
-    line = f"{timestamp} {message}\n"
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(line)
-    print(line.strip())
-
 # ========================
 #  Moving Average Strategy
 # ========================
