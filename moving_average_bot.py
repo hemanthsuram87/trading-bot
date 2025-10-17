@@ -1,12 +1,10 @@
 import pandas as pd
 import yfinance as yf
 import schedule
-from email.mime.text import MIMEText
 import time
 import datetime
 import os
 import requests
-import pywhatkit
 # ========================
 #  Configuration
 # ========================
