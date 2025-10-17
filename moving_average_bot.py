@@ -59,6 +59,7 @@ def moving_average_strategy(symbol):
             return "HOLD", f"{symbol}: No crossover signal"
 
     except Exception as e:
+        send_message(f"Got an exception processing the flow {symbol}: {e}")
         return "ERROR", f"{symbol}: {e}"
 
 # ========================
@@ -98,6 +99,7 @@ def load_stocks_from_sheet():
         return stocks
     except Exception as e:
         log_message(f" Failed to fetch Google Sheet: {e}")
+        send_message(f" Failed to fetch Google Sheet: {e}")
         return []
 
 # ========================
@@ -138,7 +140,7 @@ def is_market_open():
 # ========================
 def start_scheduler():
     log_message(" Scheduler started. Bot will run every 10 minutes during market hours.")
-    send_message("Bot started and check if market is opne ")
+    
     if is_market_open():
         run_trading_bot()
     else:
