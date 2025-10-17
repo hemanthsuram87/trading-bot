@@ -65,8 +65,8 @@ def moving_average_strategy(symbol):
 # ========================
 #  SMS Notification
 # Replace these with your actual values
-BOT_TOKEN = "8475528816:AAFntgwGkp9jW5mVVnaX1MHGtM4kjPfnvC8"
-CHAT_ID = "7862318105"
+BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 
 def send_message(message):
