@@ -39,4 +39,4 @@ jobs:
 
     - name: Run Live Trading Bot
       run: |
-        python backend/services/sma20_50_atr_backtest_and_alpaca.py
+        python moving_average_bot.py
