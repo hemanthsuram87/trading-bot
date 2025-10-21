@@ -1,26 +1,77 @@
-# 📈 Python Stock Trading Bot with Telegram Alerts
+GitHub Actions Live Trading Bot Workflow
+          ┌───────────────────┐
+          │ GitHub Repository │
+          │ (Python Bot Code) │
+          └────────┬──────────┘
+                   │
+                   │ Push / Schedule / Manual Run
+                   ▼
+          ┌─────────────────────────┐
+          │ GitHub Actions Workflow │
+          │ .github/workflows/...   │
+          └────────┬────────────────┘
+                   │
+                   │ Sets up environment, Python, dependencies
+                   ▼
+          ┌─────────────────────────┐
+          │ Python Bot Execution    │
+          │ sma20_50_atr_backtest  │
+          └────────┬────────────────┘
+                   │
+                   │ Reads environment variables:
+                   │ - ALPACA_KEY / SECRET / BASE_URL
+                   │ - TELEGRAM_TOKEN / CHAT_ID
+                   │ - DRY_RUN flag
+                   │ - GOOGLE_CREDS_JSON
+                   ▼
+          ┌─────────────────────────┐
+          │ Alpaca API (Live/Paper)│
+          │ - Fetch account info   │
+          │ - Fetch positions      │
+          │ - Fetch market data    │
+          │ - Place buy/sell orders│
+          └────────┬────────────────┘
+                   │
+                   │ Market data + signals processed
+                   ▼
+          ┌─────────────────────────┐
+          │ Trading Logic & Signals │
+          │ - SMA 20 / SMA 50      │
+          │ - ATR sizing           │
+          │ - Buy / Sell decision  │
+          └────────┬────────────────┘
+                   │
+                   │ Trade executed or simulated
+                   ▼
+          ┌─────────────────────────┐
+          │ Google Sheets Update    │
+          │ - Tickers & positions   │
+          │ - P&L, current price    │
+          │ - Total equity          │
+          └────────┬────────────────┘
+                   │
+                   │ Send alert
+                   ▼
+          ┌─────────────────────────┐
+          │ Telegram Notification   │
+          │ - Buy/Sell trades       │
+          │ - Errors or info logs   │
+          └─────────────────────────┘
 
-An automated trading signal bot that calculates **20-day** and **200-day moving averages** for selected stocks and sends **Buy/Sell alerts** via **Telegram** — scheduled to run automatically during U.S. market hours.
+Flow Summary
 
----
+GitHub Actions triggers the bot (schedule or manual).
 
-## 🚀 Features
+The workflow sets up Python and installs dependencies.
 
-✅ Fetches live stock data using [yfinance](https://pypi.org/project/yfinance/)  
-✅ Calculates **20-day** and **200-day** moving averages  
-✅ Generates **Buy/Sell** signals based on crossover strategy  
-✅ Sends instant alerts to **Telegram** via Bot API  
-✅ Runs automatically every **10 minutes** between **9:30 AM–4:00 PM (ET)** using **GitHub Actions**  
-✅ Logs all actions and signals with timestamps  
+The bot reads API keys & environment variables securely.
 
----
+It connects to Alpaca API to fetch account, positions, and market data.
 
-## 🧰 Requirements
+It runs the trading logic (SMA + ATR strategy) and decides whether to buy/sell.
 
-- Python **3.9+**
-- A [Telegram Bot](https://core.telegram.org/bots#6-botfather) (via [@BotFather](https://t.me/botfather))
-- A **GitHub account** for cloud scheduling
-- Required Python packages:
+Trades are executed or simulated depending on DRY_RUN.
 
-```bash
-pip install pandas yfinance requests schedule
+Positions, equity, and P&L are updated in Google Sheets.
+
+Alerts and logs are sent via Telegram and Actions logs.
