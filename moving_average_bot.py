@@ -35,7 +35,7 @@ scope = ["https://spreadsheets.google.com/feeds",
 creds = ServiceAccountCredentials.from_json_keyfile_name(GOOGLE_CREDS_FILE, scope)
 client = gspread.authorize(creds)
 
-sheet = client.open("TradingBotSheet")
+sheet = client.open("Daily_stocks")
 tickers_ws = sheet.worksheet("Tickers")
 positions_ws = sheet.worksheet("Positions")
 equity_ws = sheet.worksheet("Equity")
