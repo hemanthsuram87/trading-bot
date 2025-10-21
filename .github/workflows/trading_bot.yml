@@ -3,7 +3,7 @@ name: Live Trading Bot
 # Trigger every 5 minutes during US market hours (ET) or manually
 on:
   schedule:
-    - cron: '*/5 13-20 * * 1-5'  # 13:30-20:00 UTC = 9:30-16:00 ET
+    - cron: '*/5 04-20 * * 1-5'  # 13:30-20:00 UTC = 9:30-16:00 ET
   workflow_dispatch:
 
 jobs:
