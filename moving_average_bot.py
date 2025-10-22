@@ -153,7 +153,8 @@ def live_trading_loop():
     log_message("⏰ Market closed. Live monitoring ended.")
 
 # ================= EXECUTION =================
-if LIVE_RUN:
-    live_trading_loop()
-else:
-    previous_day_analysis()
+if __name__ == "__main__":
+    if LIVE_RUN:
+        live_trading_loop()
+    else:
+        previous_day_analysis()
