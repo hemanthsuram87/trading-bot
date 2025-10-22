@@ -3,157 +3,147 @@ import pandas as pd
 import numpy as np
 import requests
 import alpaca_trade_api as tradeapi
+from datetime import datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import time
 
 # ================= CONFIG =================
-# Read keys and settings from environment variables (GitHub Actions safe)
-ALPACA_KEY = os.getenv("ALPACA_KEY")
-ALPACA_SECRET = os.getenv("ALPACA_SECRET")
+ALPACA_KEY = "PK237O7I63OSG4RKO32AQMCQVG"
+ALPACA_SECRET = "EFez3L8WnR3DouNoXRYk2LEsCGpXejCTwd9ebUopxt1e"
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN = "8475528816:AAFntgwGkp9jW5mVVnaX1MHGtM4kjPfnvC8"
+TELEGRAM_CHAT_ID = "7862318105"
 GOOGLE_CREDS_FILE = "service_account.json"
+LOG_DIR = "logs"
 
-# Trading strategy parameters
 SMA_SHORT = 20
 SMA_LONG = 50
 ATR_PERIOD = 14
-RISK_PER_TRADE = 0.01
-ATR_MULTIPLIER = 1
-
-# Dry-run mode: True = simulate trades, False = place live orders
-DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
-
-# ================= INIT =================
-print("Initializing Alpaca API and Google Sheets...")
-api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, ALPACA_BASE_URL, api_version='v2')
-
-# Google Sheets setup
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name(GOOGLE_CREDS_FILE, scope)
-client = gspread.authorize(creds)
-
-# Connect to Google Sheet
-sheet = client.open("Daily_stocks")
-tickers_ws = sheet.worksheet("Tickers")
-positions_ws = sheet.worksheet("Positions")
-equity_ws = sheet.worksheet("Equity")
-
-tickers = tickers_ws.col_values(1)
-send_message = lambda msg: print(msg) or (
-    TELEGRAM_TOKEN and TELEGRAM_CHAT_ID and requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}
-    )
-)
-send_message(f"✅ Bot started. Loaded {len(tickers)} tickers: {tickers}")
+ATR_MULTIPLIER = 1  # for risk sizing
+RSI_PERIOD = 14
+DRY_RUN = True  # True = backtest/analysis, False = live trade mode
 
 # ================= HELPERS =================
+def send_message(msg):
+    print(msg)
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}
+            )
+        except Exception as e:
+            print(f"Telegram error: {e}")
+
+def log_message(msg):
+    os.makedirs(LOG_DIR, exist_ok=True)
+    log_file = os.path.join(LOG_DIR, f"trade_signals_{datetime.now().strftime('%Y-%m-%d')}.log")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {msg}\n")
+    print(f"[{timestamp}] {msg}")
+
 def compute_atr(df, period=14):
-    df['H-L'] = df['High'] - df['Low']
-    df['H-Cp'] = abs(df['High'] - df['Close'].shift(1))
-    df['L-Cp'] = abs(df['Low'] - df['Close'].shift(1))
+    df['H-L'] = df['high'] - df['low']
+    df['H-Cp'] = abs(df['high'] - df['close'].shift(1))
+    df['L-Cp'] = abs(df['low'] - df['close'].shift(1))
     tr = df[['H-L', 'H-Cp', 'L-Cp']].max(axis=1)
     return tr.rolling(period).mean()
 
-def compute_shares_by_atr(equity, atr_value, price):
-    stop_distance = atr_value * ATR_MULTIPLIER
-    if stop_distance <= 0 or np.isnan(stop_distance):
-        return 0
-    dollar_risk = equity * RISK_PER_TRADE
-    return max(int(dollar_risk / stop_distance), 0)
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
-def market_open():
-    clock = api.get_clock()
-    return clock.is_open
+# ================= GOOGLE SHEETS =================
+def get_tickers_from_sheet(sheet_name="Daily_stocks", worksheet_name="Tickers"):
+    scope = ["https://spreadsheets.google.com/feeds",
+             "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name(GOOGLE_CREDS_FILE, scope)
+    client = gspread.authorize(creds)
+    sheet = client.open(sheet_name).worksheet(worksheet_name)
+    return sheet.col_values(1)
 
-# ================= LOAD ACCOUNT =================
-account = api.get_account()
-cash = float(account.cash)
-positions_list = api.list_positions()
-positions_dict = {p.symbol.upper(): int(p.qty) for p in positions_list}
-avg_price_dict = {p.symbol.upper(): float(p.avg_entry_price) for p in positions_list}
+# ================= INIT =================
+api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, ALPACA_BASE_URL, api_version='v2')
+today = datetime.now().date()
+yesterday = today - timedelta(days=1)
+mode = "LIVE" if not DRY_RUN else "BACKTEST"
+log_message(f"📊 Starting {mode} analysis for {yesterday}")
 
-# Prepare positions sheet
-positions_df = pd.DataFrame(positions_ws.get_all_records())
-if positions_df.empty or len(positions_df) != len(tickers):
-    positions_df = pd.DataFrame({
-        'Ticker': tickers,
-        'Shares': [positions_dict.get(t, 0) for t in tickers],
-        'AvgPrice': [avg_price_dict.get(t, 0) for t in tickers],
-        'CurrentPrice': [0]*len(tickers),
-        'P&L': [0]*len(tickers)
-    })
+# ================= MAIN =================
+try:
+    tickers = get_tickers_from_sheet()
+except Exception as e:
+    log_message(f"⚠️ Error fetching tickers from Google Sheet: {e}")
+    tickers = ["AAPL", "TSLA"]  # fallback list
 
-# ================= MAIN LOOP =================
-if not market_open():
-    send_message("❌ Market is closed. Exiting bot.")
-    exit()
-
-total_unrealized = 0
-positions_updates = []
+results = []
 
 for ticker in tickers:
-    ticker = ticker.strip().upper()
     try:
-        bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute, limit=60).df.tail(60)
-        if len(bars) < SMA_LONG:
-            send_message(f"Skipping {ticker}: not enough data.")
+        start_dt = f"{yesterday}T09:30:00-04:00"
+        end_dt = f"{yesterday}T16:00:00-04:00"
+        bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute, start=start_dt, end=end_dt, feed="iex").df
+
+        if bars.empty or len(bars) < SMA_LONG:
+            log_message(f"⚠️ Not enough data for {ticker}, skipping")
             continue
 
-        close = bars['close']
-        high = bars['high']
-        low = bars['low']
+        bars["SMA20"] = bars["close"].rolling(SMA_SHORT).mean()
+        bars["SMA50"] = bars["close"].rolling(SMA_LONG).mean()
+        bars["ATR"] = compute_atr(bars, ATR_PERIOD)
+        bars["RSI"] = compute_rsi(bars["close"], RSI_PERIOD)
+        bars = bars.reset_index()
+        bars["Signal"] = ""
+        bars["Reason"] = ""
+        bars["TradeTime"] = bars["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
-        sma_short = close.rolling(SMA_SHORT).mean().iloc[-1]
-        sma_long = close.rolling(SMA_LONG).mean().iloc[-1]
-        atr = compute_atr(pd.DataFrame({'High': high, 'Low': low, 'Close': close}), ATR_PERIOD).iloc[-1]
-        current_price = close.iloc[-1]
+        for i in range(1, len(bars)):
+            prev = bars.iloc[i-1]
+            curr = bars.iloc[i]
+            atr_value = curr["ATR"]
+            stop_distance = atr_value * ATR_MULTIPLIER
 
-        current_shares = positions_dict.get(ticker, 0)
-        current_avg_price = avg_price_dict.get(ticker, 0)
+            # BUY condition: SMA crossover + RSI filter
+            if prev["SMA20"] < prev["SMA50"] and curr["SMA20"] > curr["SMA50"] and curr["RSI"] < 70:
+                bars.at[i, "Signal"] = "BUY 🔼"
+                reason = f"SMA20 crossed above SMA50 | RSI={curr['RSI']:.2f} | ATR={atr_value:.2f}"
+                bars.at[i, "Reason"] = reason
+                msg = f"{ticker} BUY at {curr['close']:.2f} on {curr['TradeTime']} ({reason})"
+                log_message(msg)
+                send_message(msg)
 
-        # BUY
-        if sma_short > sma_long and current_shares == 0:
-            shares_to_trade = compute_shares_by_atr(cash, atr, current_price)
-            if shares_to_trade > 0:
-                if DRY_RUN:
-                    send_message(f"[DRY-RUN] BUY {shares_to_trade} {ticker} at ${current_price:.2f}")
-                else:
-                    api.submit_order(symbol=ticker, qty=shares_to_trade, side='buy', type='market', time_in_force='day')
-                    cash -= shares_to_trade * current_price
-                    send_message(f"[LIVE] ✅ BUY {shares_to_trade} {ticker} at ${current_price:.2f}")
-                positions_dict[ticker] = shares_to_trade
-                avg_price_dict[ticker] = current_price
+                if not DRY_RUN:
+                    qty = max(int(1000 / stop_distance), 1)  # simple position sizing example
+                    api.submit_order(symbol=ticker, qty=qty, side="buy", type="market", time_in_force="day")
 
-        # SELL
-        elif sma_short < sma_long and current_shares > 0:
-            shares_to_trade = current_shares
-            if DRY_RUN:
-                send_message(f"[DRY-RUN] SELL {shares_to_trade} {ticker} at ${current_price:.2f}")
-            else:
-                api.submit_order(symbol=ticker, qty=shares_to_trade, side='sell', type='market', time_in_force='day')
-                cash += shares_to_trade * current_price
-                send_message(f"[LIVE] ❌ SELL {shares_to_trade} {ticker} at ${current_price:.2f}")
-            positions_dict[ticker] = 0
-            avg_price_dict[ticker] = 0
+            # SELL condition
+            elif prev["SMA20"] > prev["SMA50"] and curr["SMA20"] < curr["SMA50"] and curr["RSI"] > 30:
+                bars.at[i, "Signal"] = "SELL 🔽"
+                reason = f"SMA20 crossed below SMA50 | RSI={curr['RSI']:.2f} | ATR={atr_value:.2f}"
+                bars.at[i, "Reason"] = reason
+                msg = f"{ticker} SELL at {curr['close']:.2f} on {curr['TradeTime']} ({reason})"
+                log_message(msg)
+                send_message(msg)
 
-        # Update P&L
-        unrealized = positions_dict[ticker] * (current_price - avg_price_dict[ticker])
-        total_unrealized += unrealized
-        positions_updates.append([positions_dict[ticker], avg_price_dict[ticker], current_price, unrealized])
+                if not DRY_RUN:
+                    qty = max(int(1000 / stop_distance), 1)
+                    api.submit_order(symbol=ticker, qty=qty, side="sell", type="market", time_in_force="day")
+
+        results.append(bars)
 
     except Exception as e:
-        send_message(f"⚠️ Error processing {ticker}: {e}")
+        log_message(f"⚠️ Error analyzing {ticker}: {e}")
         continue
 
-# ================= UPDATE GOOGLE SHEETS =================
-try:
-    positions_ws.update(positions_updates, range_name=f'B2:E{len(tickers)+1}')
-    equity_ws.update('A2', [[cash]])
-    equity_ws.update('B2', [[cash + total_unrealized]])
-    send_message(f"✅ Bot completed successfully. Total Equity: ${cash + total_unrealized:.2f}")
-except Exception as e:
-    send_message(f"⚠️ Google Sheets update failed: {e}")
+log_message("📊 Daily analysis completed.")
+
+# Optional: save results to CSV for later review
+for df in results:
+    df.to_csv(os.path.join(LOG_DIR, f"{ticker}_signals_{yesterday}.csv"), index=False)
