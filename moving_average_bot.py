@@ -9,12 +9,13 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ================= CONFIG =================
-ALPACA_KEY = os.getenv("ALPACA_KEY")
-ALPACA_SECRET = os.getenv("ALPACA_SECRET")
+ALPACA_KEY = "PK237O7I63OSG4RKO32AQMCQVG"
+ALPACA_SECRET = "EFez3L8WnR3DouNoXRYk2LEsCGpXejCTwd9ebUopxt1e"
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN = "8475528816:AAFntgwGkp9jW5mVVnaX1MHGtM4kjPfnvC8"
+TELEGRAM_CHAT_ID = "7862318105"
 GOOGLE_CREDS_FILE = "service_account.json"
+
 
 SMA_SHORT = 20
 SMA_LONG = 50
@@ -167,7 +168,7 @@ def live_trading_loop():
         except Exception as e:
             log_message(f"⚠️ Error analyzing {ticker}: {e}")
     time.sleep(CHECK_INTERVAL)
-   log_message("⏰ Market closed. Live monitoring ended.")
+    log_message("⏰ Market closed. Live monitoring ended.")
 
 
 # ================= EXECUTION =================
