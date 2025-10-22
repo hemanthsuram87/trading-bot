@@ -140,17 +140,17 @@ def previous_day_analysis():
 # Live trading check
 def live_trading_loop():
     log_message("🚀 Starting live trading monitoring...")
-    while market_open():
-        for ticker in tickers:
-            try:
-                bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute, limit=SMA_LONG*2, feed="iex").df
-                if bars.empty:
-                    continue
-                analyze_ticker(ticker, bars)
-            except Exception as e:
-                log_message(f"⚠️ Error analyzing {ticker}: {e}")
-        time.sleep(CHECK_INTERVAL)
-    log_message("⏰ Market closed. Live monitoring ended.")
+ 
+    for ticker in tickers:
+        try:
+            bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute, limit=SMA_LONG*2, feed="iex").df
+            if bars.empty:
+                continue
+            analyze_ticker(ticker, bars)
+        except Exception as e:
+            log_message(f"⚠️ Error analyzing {ticker}: {e}")
+    time.sleep(CHECK_INTERVAL)
+  log_message("⏰ Market closed. Live monitoring ended.")
 
 # ================= EXECUTION =================
 if __name__ == "__main__":
