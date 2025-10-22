@@ -150,7 +150,7 @@ def live_trading_loop():
         except Exception as e:
             log_message(f"⚠️ Error analyzing {ticker}: {e}")
     time.sleep(CHECK_INTERVAL)
-   log_message("⏰ Market closed. Live monitoring ended.")
+    log_message("⏰ Market closed. Live monitoring ended.")
 
 # ================= EXECUTION =================
 if __name__ == "__main__":
