@@ -81,6 +81,9 @@ def market_open():
     return clock.is_open
 
 # ================= MAIN LOOP =================
+# Track last signal per ticker to avoid duplicates
+last_signal_sent = {}
+
 def analyze_ticker(ticker, bars):
     bars["SMA20"] = bars["close"].rolling(SMA_SHORT).mean()
     bars["SMA50"] = bars["close"].rolling(SMA_LONG).mean()
@@ -90,41 +93,52 @@ def analyze_ticker(ticker, bars):
         "close": bars["close"]
     }), ATR_PERIOD)
 
-    bars = bars.reset_index()
-    bars["Signal"] = ""
-    bars["Reason"] = ""
-    bars["TradeTime"] = bars["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    # Only look at the last two candles
+    if len(bars) < SMA_LONG:
+        return []
 
-    signals = []
+    prev = bars.iloc[-2]
+    curr = bars.iloc[-1]
 
-    for i in range(1, len(bars)):
-        prev = bars.iloc[i-1]
-        curr = bars.iloc[i]
-        atr_value = curr["ATR"]
-        stop_distance = atr_value * ATR_MULTIPLIER
+    atr_value = curr["ATR"]
+    stop_distance = atr_value * ATR_MULTIPLIER
+    trade_time = curr.name if isinstance(curr.name, datetime) else datetime.now()
+    trade_time = trade_time.strftime("%Y-%m-%d %H:%M:%S")
 
-        # BUY signal
-        if prev["SMA20"] < prev["SMA50"] and curr["SMA20"] > curr["SMA50"]:
-            reason = f"SMA20 crossed above SMA50 → bullish trend | ATR={atr_value:.2f}, Stop-risk distance={stop_distance:.2f}"
-            msg = f"{ticker} BUY at {curr['close']:.2f} on {curr['TradeTime']} ({reason})"
-            log_message(msg)
-            send_message(msg)
-            signals.append({"ticker": ticker, "signal": "BUY", "price": curr["close"], "reason": reason, "time": curr['TradeTime']})
+    ticker_signal = None
+    reason = ""
 
-        # SELL signal
-        elif prev["SMA20"] > prev["SMA50"] and curr["SMA20"] < curr["SMA50"]:
-            reason = f"SMA20 crossed below SMA50 → bearish trend | ATR={atr_value:.2f}, Stop-risk distance={stop_distance:.2f}"
-            msg = f"{ticker} SELL at {curr['close']:.2f} on {curr['TradeTime']} ({reason})"
-            log_message(msg)
-            send_message(msg)
-            signals.append({"ticker": ticker, "signal": "SELL", "price": curr["close"], "reason": reason, "time": curr['TradeTime']})
-    return signals
+    # BUY signal
+    if prev["SMA20"] < prev["SMA50"] and curr["SMA20"] > curr["SMA50"]:
+        ticker_signal = "BUY"
+        reason = f"SMA20 crossed above SMA50 → bullish trend | ATR={atr_value:.2f}, Stop-risk distance={stop_distance:.2f}"
+
+    # SELL signal
+    elif prev["SMA20"] > prev["SMA50"] and curr["SMA20"] < curr["SMA50"]:
+        ticker_signal = "SELL"
+        reason = f"SMA20 crossed below SMA50 → bearish trend | ATR={atr_value:.2f}, Stop-risk distance={stop_distance:.2f}"
+
+    # If no signal or duplicate → skip
+    if not ticker_signal:
+        return []
+
+    if last_signal_sent.get(ticker) == ticker_signal:
+        return []  # same direction already alerted
+
+    # Record and send
+    last_signal_sent[ticker] = ticker_signal
+    msg = f"{ticker} {ticker_signal} at {curr['close']:.2f} on {trade_time} ({reason})"
+    log_message(msg)
+    send_message(msg)
+
+    return [{"ticker": ticker, "signal": ticker_signal, "price": curr["close"], "reason": reason, "time": trade_time}]
+
 
 # Previous day analysis
 def previous_day_analysis():
     yesterday = (datetime.now() - timedelta(days=1)).date()
     log_message(f"📊 Starting previous-day analysis for {yesterday}")
-
+    print(f"Tickers picked up for today {tickers}")
     for ticker in tickers:
         try:
             start_date = f"{yesterday}T09:30:00-04:00"
@@ -140,17 +154,21 @@ def previous_day_analysis():
 # Live trading check
 def live_trading_loop():
     log_message("🚀 Starting live trading monitoring...")
- 
-    for ticker in tickers:
-        try:
-            bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute, limit=SMA_LONG*2, feed="iex").df
-            if bars.empty:
-                continue
-            analyze_ticker(ticker, bars)
-        except Exception as e:
-            log_message(f"⚠️ Error analyzing {ticker}: {e}")
-    time.sleep(CHECK_INTERVAL)
-    log_message("⏰Live monitoring check ended. lets recheck back in 5 minutes")
+    while market_open():
+        for ticker in tickers:
+            try:
+                bars = api.get_bars(
+                    ticker, tradeapi.TimeFrame.Minute,
+                    limit=SMA_LONG + 5, feed="iex"
+                ).df
+                if bars.empty:
+                    continue
+                analyze_ticker(ticker, bars)
+            except Exception as e:
+                log_message(f"⚠️ Error analyzing {ticker}: {e}")
+        time.sleep(CHECK_INTERVAL)
+    log_message("⏰ Market closed. Live monitoring ended.")
+
 
 # ================= EXECUTION =================
 if __name__ == "__main__":
