@@ -2,14 +2,10 @@ name: 📊 Daily Trading Automation (Morning + Live + EOD)
 
 on:
   schedule:
-    # 1️⃣ Morning Scan – 8:30 AM EST → 12:30 UTC
-    - cron: "30 12 * * 1-5"
-    # 2️⃣ Live Trading – every 5 min from 9:30–16:00 EST → 13:30–20:00 UTC
-    - cron: "*/5 13-20 * * 1-5"
-    # 3️⃣ End-of-Day Analysis – 4:15 PM EST → 20:15 UTC
-    - cron: "15 20 * * 1-5"
-
-  workflow_dispatch:  # manual trigger
+    - cron: "30 12 * * 1-5"   # Morning scan
+    - cron: "*/5 13-20 * * 1-5"  # Live trading
+    - cron: "15 20 * * 1-5"   # End-of-day
+  workflow_dispatch:
 
 jobs:
   trading_automation:
@@ -30,8 +26,10 @@ jobs:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
 
-      - name: 📦 Install dependencies
-        run: pip install -r requirements.txt
+      - name: 📦 Install dependencies (including ta)
+        run: |
+          pip install -r requirements.txt
+          pip install ta
 
       - name: 🔑 Create Google credentials file
         run: echo '${{ secrets.GOOGLE_CREDS_JSON }}' > google_creds.json
@@ -41,8 +39,6 @@ jobs:
         run: |
           HOUR=$(date -u +"%H")
           MIN=$(date -u +"%M")
-          echo "Current UTC time: $HOUR:$MIN"
-
           if [ "$HOUR" -eq 12 ] && [ "$MIN" -ge 30 ] && [ "$MIN" -lt 35 ]; then
             PHASE="morning"
           elif [ "$HOUR" -ge 13 ] && [ "$HOUR" -lt 20 ]; then
