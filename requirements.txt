@@ -2,3 +2,4 @@ pandas
 yfinance
 requests
 schedule
+alpaca-trade-api
