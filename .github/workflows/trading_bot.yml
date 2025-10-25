@@ -86,6 +86,7 @@ jobs:
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions Bot"
+          git remote set-url origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/hemanthsuram87/trading-bot.git
           # Only add if files/folders exist
           git add logs/* signals/* || echo "No logs or signals to add"
           git commit -m "Auto-update logs $(date -u)" || echo "No changes to commit"
