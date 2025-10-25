@@ -339,21 +339,13 @@ def morning_scan():
     log_message("✅ Morning scan completed successfully.")
 
 
-if len(sys.argv) > 1:
-    mode = sys.argv[1].lower()
-else:
-    mode = "auto"
+if __name__ == "__main__":
+    mode = sys.argv[1] if len(sys.argv) > 1 else "analysis"
 
-if mode == "morning":
-    morning_scan()
-elif mode == "live":
-    live_trading_loop()
-elif mode == "analysis":
-    previous_day_analysis()
-else:
-    # Auto mode (if manually triggered)
-    if LIVE_RUN:
-        live_trading_loop()
-    else:
+    if mode == "morning":
+        morning_scan()
+    elif mode == "live":
+        live_trading_loop(interval=5)
+    elif mode == "analysis":
         previous_day_analysis()
 
