@@ -30,6 +30,7 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install ta
+          pip install alpaca-trade-api alpha_vantage
 
       - name: 🔑 Create Google credentials file
         run: echo '${{ secrets.GOOGLE_CREDS_JSON }}' > google_creds.json
