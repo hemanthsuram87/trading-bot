@@ -33,7 +33,7 @@ jobs:
           pip install alpaca-trade-api alpha_vantage
 
       - name: 🔑 Create Google credentials file
-        run: echo '${{ secrets.GOOGLE_CREDS_JSON }}' > google_creds.json
+        run: echo '${{ secrets.SERVICE_ACCOUNT_JSON }}' > google_creds.json
 
       - name: 🧠 Determine which phase to run
         id: phase
