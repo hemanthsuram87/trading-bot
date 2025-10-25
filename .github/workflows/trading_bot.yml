@@ -85,6 +85,8 @@ jobs:
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions Bot"
-          git add logs/ signals/
-          git commit -m "Auto-update logs $(date -u)" || echo "No changes"
-          git push
+          # Only add if files/folders exist
+          git add logs/* signals/* || echo "No logs or signals to add"
+          git commit -m "Auto-update logs $(date -u)" || echo "No changes to commit"
+          git push || echo "Nothing to push"
+
