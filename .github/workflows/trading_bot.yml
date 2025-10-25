@@ -46,7 +46,7 @@ jobs:
           elif [ "$HOUR" -eq 20 ] && [ "$MIN" -ge 10 ]; then
             PHASE="eod"
           else
-            PHASE="skip"
+            PHASE="eod"
           fi
           echo "phase=$PHASE" >> $GITHUB_OUTPUT
 
