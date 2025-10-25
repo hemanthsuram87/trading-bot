@@ -18,7 +18,7 @@ ALPACA_SECRET = os.getenv("ALPACA_SECRET")
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-GOOGLE_CREDS_FILE = "service_account.json"
+GOOGLE_CREDS_FILE = "google_creds.json"
 
 SMA_SHORT = 20
 SMA_LONG = 50
