@@ -1,0 +1,24 @@
+name: 📊 End of Day Analysis
+
+on:
+  schedule:
+    - cron: "15 20 * * 1-5"  # 4:15 PM EST
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: echo '${{ secrets.GOOGLE_CREDS_JSON }}' > google_creds.json
+      - env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_CREDS_FILE: "google_creds.json"
+        run: python LastDaytradingbot.py analysis
