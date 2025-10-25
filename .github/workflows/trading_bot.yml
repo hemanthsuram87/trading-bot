@@ -1,42 +1,94 @@
-name: Live Trading Bot
+name: 📊 Daily Trading Automation (Morning + Live + EOD)
 
-# Trigger every 5 minutes during US market hours (ET) or manually
 on:
   schedule:
-    - cron: '*/5 13-20 * * 1-5'  # 13:30-20:00 UTC = 9:30-16:00 ET
-  workflow_dispatch:
+    # 1️⃣ Morning Scan – 8:30 AM EST → 12:30 UTC
+    - cron: "30 12 * * 1-5"
+    # 2️⃣ Live Trading – every 5 min from 9:30–16:00 EST → 13:30–20:00 UTC
+    - cron: "*/5 13-20 * * 1-5"
+    # 3️⃣ End-of-Day Analysis – 4:15 PM EST → 20:15 UTC
+    - cron: "15 20 * * 1-5"
+
+  workflow_dispatch:  # manual trigger
 
 jobs:
-  run-bot:
+  trading_automation:
     runs-on: ubuntu-latest
 
-    env:
-      ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
-      ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
-      ALPACA_BASE_URL: ${{ secrets.ALPACA_BASE_URL }}
-      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      DRY_RUN: ${{ secrets.DRY_RUN }}  # Set to "True" for paper/dry-run, "False" for live
-      GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      - name: 🧾 Checkout repo
+        uses: actions/checkout@v4
 
-    - name: Set up Python 3.13
-      uses: actions/setup-python@v4
-      with:
-        python-version: 3.13
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install requests pandas numpy gspread oauth2client alpaca-trade-api alpha_vantage
+      - name: ⚡ Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
 
-    - name: Write Google credentials JSON
-      run: |
-        echo '${{ secrets.GOOGLE_CREDS_JSON }}' > service_account.json
+      - name: 📦 Install dependencies
+        run: pip install -r requirements.txt
 
-    - name: Run Live Trading Bot
-      run: |
-        python moving_average_bot.py live
+      - name: 🔑 Create Google credentials file
+        run: echo '${{ secrets.GOOGLE_CREDS_JSON }}' > google_creds.json
+
+      - name: 🧠 Determine which phase to run
+        id: phase
+        run: |
+          HOUR=$(date -u +"%H")
+          MIN=$(date -u +"%M")
+          echo "Current UTC time: $HOUR:$MIN"
+
+          if [ "$HOUR" -eq 12 ] && [ "$MIN" -ge 30 ] && [ "$MIN" -lt 35 ]; then
+            PHASE="morning"
+          elif [ "$HOUR" -ge 13 ] && [ "$HOUR" -lt 20 ]; then
+            PHASE="live"
+          elif [ "$HOUR" -eq 20 ] && [ "$MIN" -ge 10 ]; then
+            PHASE="eod"
+          else
+            PHASE="skip"
+          fi
+          echo "phase=$PHASE" >> $GITHUB_OUTPUT
+
+      - name: 🚀 Run Morning Scan
+        if: steps.phase.outputs.phase == 'morning'
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_CREDS_FILE: "google_creds.json"
+        run: python LastDaytradingbot.py morning
+
+      - name: 📈 Run Live Trading (every 5 min)
+        if: steps.phase.outputs.phase == 'live'
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_CREDS_FILE: "google_creds.json"
+        run: python LastDaytradingbot.py live
+
+      - name: 📊 Run End-of-Day Analysis
+        if: steps.phase.outputs.phase == 'eod'
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_CREDS_FILE: "google_creds.json"
+        run: python LastDaytradingbot.py analysis
+
+      - name: 💾 Commit logs (optional)
+        if: always()
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions Bot"
+          git add logs/ signals/
+          git commit -m "Auto-update logs $(date -u)" || echo "No changes"
+          git push
