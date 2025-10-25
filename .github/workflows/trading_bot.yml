@@ -7,6 +7,9 @@ on:
     - cron: "15 20 * * 1-5"   # End-of-day
   workflow_dispatch:
 
+permissions:
+  contents: write
+  
 jobs:
   trading_automation:
     runs-on: ubuntu-latest
