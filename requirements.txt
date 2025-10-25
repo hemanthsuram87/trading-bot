@@ -3,3 +3,4 @@ yfinance
 requests
 schedule
 alpaca-trade-api
+alpha_vantage
