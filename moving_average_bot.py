@@ -339,11 +339,21 @@ def morning_scan():
     log_message("✅ Morning scan completed successfully.")
 
 
-current_hour = datetime.now().astimezone().hour
-if 8 <= current_hour < 9:  # Between 8:00–9:00 AM EST
-    morning_scan()
-elif LIVE_RUN:
-    live_trading_loop()
+if len(sys.argv) > 1:
+    mode = sys.argv[1].lower()
 else:
+    mode = "auto"
+
+if mode == "morning":
+    morning_scan()
+elif mode == "live":
+    live_trading_loop()
+elif mode == "analysis":
     previous_day_analysis()
+else:
+    # Auto mode (if manually triggered)
+    if LIVE_RUN:
+        live_trading_loop()
+    else:
+        previous_day_analysis()
 
