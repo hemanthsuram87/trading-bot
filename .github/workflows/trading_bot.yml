@@ -39,4 +39,4 @@ jobs:
 
     - name: Run Live Trading Bot
       run: |
-        python moving_average_bot.py
+        python moving_average_bot.py live
