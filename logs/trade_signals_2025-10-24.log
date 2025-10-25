@@ -1,0 +1,725 @@
+[2025-10-24 22:21:40] 🔴 Market is closed — running previous-day analysis.
+[2025-10-24 22:22:53] 🔴 Market is closed — running previous-day analysis.
+[2025-10-24 22:23:12] 🔴 Market is closed — running previous-day analysis.
+[2025-10-24 22:23:14] 📊 Starting previous-day analysis for 2025-10-24
+[2025-10-24 22:23:15] ⚠️ Error analyzing AAPL: name 'ta' is not defined
+[2025-10-24 22:23:15] ⚠️ Error analyzing AXP: name 'ta' is not defined
+[2025-10-24 22:23:15] ⚠️ Error analyzing BAC: name 'ta' is not defined
+[2025-10-24 22:23:15] ⚠️ Error analyzing NVDA: name 'ta' is not defined
+[2025-10-24 22:23:15] ⚠️ Error analyzing TXN: name 'ta' is not defined
+[2025-10-24 22:23:15] ⚠️ Error analyzing APLD: name 'ta' is not defined
+[2025-10-24 22:26:29] 🔴 Market is closed — running previous-day analysis.
+[2025-10-24 22:26:31] 📊 Starting previous-day analysis for 2025-10-24
+[2025-10-24 22:26:32] 🔴 AAPL SELL at 263.26 on 2025-10-24 12:39:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.13, StopDist=0.13
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:32] 🟢 AAPL BUY at 263.67 on 2025-10-24 13:13:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.13, StopDist=0.13
+✅ RSI > 55
+✅ ADX > 25
+✅ MACD bullish
+✅ Volume spike
+❌ ATR in range
+❌ Higher TF bullish
+[2025-10-24 22:26:33] 🔴 AAPL SELL at 263.71 on 2025-10-24 14:17:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.08, StopDist=0.08
+✅ MACD bearish
+✅ Higher TF bearish
+❌ RSI < 45
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:34] 🟢 AAPL BUY at 264.03 on 2025-10-24 14:29:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.09, StopDist=0.09
+✅ RSI > 55
+✅ MACD bullish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:26:35] 🔴 AAPL SELL at 263.85 on 2025-10-24 14:49:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.11, StopDist=0.11
+✅ RSI < 45
+✅ ADX > 25
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:36] 🟢 AAPL BUY at 263.51 on 2025-10-24 15:39:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.08, StopDist=0.08
+✅ RSI > 55
+✅ MACD bullish
+✅ Volume spike
+❌ ADX > 25
+❌ ATR in range
+❌ Higher TF bullish
+[2025-10-24 22:26:36] 🔴 AAPL SELL at 263.11 on 2025-10-24 15:52:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.13, StopDist=0.13
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:37] 🔴 AXP SELL at 360.74 on 2025-10-24 11:30:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.22, StopDist=0.22
+✅ MACD bearish
+✅ Higher TF bearish
+❌ RSI < 45
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:38] 🟢 AXP BUY at 360.35 on 2025-10-24 14:26:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.15, StopDist=0.15
+✅ RSI > 55
+✅ MACD bullish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:26:39] 🔴 AXP SELL at 359.70 on 2025-10-24 15:11:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.11, StopDist=0.11
+✅ RSI < 45
+✅ MACD bearish
+✅ Volume spike
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+[2025-10-24 22:26:40] 🔴 BAC SELL at 52.47 on 2025-10-24 10:26:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.03, StopDist=0.03
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:40] 🟢 BAC BUY at 52.58 on 2025-10-24 10:45:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.04, StopDist=0.04
+✅ RSI > 55
+✅ ADX > 25
+✅ MACD bullish
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:26:41] 🔴 BAC SELL at 52.72 on 2025-10-24 12:09:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.02, StopDist=0.02
+✅ RSI < 45
+✅ MACD bearish
+✅ Volume spike
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+[2025-10-24 22:26:42] 🟢 BAC BUY at 52.59 on 2025-10-24 13:41:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.02, StopDist=0.02
+✅ RSI > 55
+✅ MACD bullish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:26:43] 🔴 BAC SELL at 52.48 on 2025-10-24 13:53:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.02, StopDist=0.02
+✅ RSI < 45
+✅ ADX > 25
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:44] 🟢 BAC BUY at 52.56 on 2025-10-24 14:14:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.01, StopDist=0.01
+✅ RSI > 55
+✅ ADX > 25
+✅ MACD bullish
+✅ Volume spike
+❌ ATR in range
+❌ Higher TF bullish
+[2025-10-24 22:26:44] 🔴 BAC SELL at 52.52 on 2025-10-24 14:38:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.01, StopDist=0.01
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:45] 🟢 BAC BUY at 52.62 on 2025-10-24 14:54:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.02, StopDist=0.02
+✅ RSI > 55
+✅ ADX > 25
+✅ MACD bullish
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:26:46] 🔴 BAC SELL at 52.57 on 2025-10-24 15:24:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.01, StopDist=0.01
+✅ MACD bearish
+✅ Higher TF bearish
+❌ RSI < 45
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:47] 🟢 NVDA BUY at 185.28 on 2025-10-24 10:45:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.14, StopDist=0.14
+✅ RSI > 55
+✅ MACD bullish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:26:48] 🔴 NVDA SELL at 184.72 on 2025-10-24 11:08:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.18, StopDist=0.18
+✅ RSI < 45
+✅ ADX > 25
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:48] 🟢 NVDA BUY at 185.39 on 2025-10-24 11:27:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.13, StopDist=0.13
+✅ RSI > 55
+✅ ADX > 25
+✅ MACD bullish
+✅ Volume spike
+❌ ATR in range
+❌ Higher TF bullish
+[2025-10-24 22:26:49] 🔴 NVDA SELL at 185.17 on 2025-10-24 12:10:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.10, StopDist=0.10
+✅ MACD bearish
+✅ Higher TF bearish
+❌ RSI < 45
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:50] 🟢 NVDA BUY at 185.16 on 2025-10-24 12:55:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.08, StopDist=0.08
+❌ RSI > 55
+❌ ADX > 25
+❌ MACD bullish
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:26:51] 🔴 NVDA SELL at 185.12 on 2025-10-24 13:10:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.06, StopDist=0.06
+✅ MACD bearish
+✅ Higher TF bearish
+❌ RSI < 45
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:51] 🟢 NVDA BUY at 185.37 on 2025-10-24 13:40:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.08, StopDist=0.08
+✅ RSI > 55
+✅ ADX > 25
+✅ MACD bullish
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:26:52] 🔴 NVDA SELL at 185.35 on 2025-10-24 14:25:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.07, StopDist=0.07
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:53] 🟢 NVDA BUY at 185.94 on 2025-10-24 15:00:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.10, StopDist=0.10
+✅ RSI > 55
+✅ ADX > 25
+✅ MACD bullish
+✅ Volume spike
+❌ ATR in range
+❌ Higher TF bullish
+[2025-10-24 22:26:54] 🔴 NVDA SELL at 186.54 on 2025-10-24 15:49:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.12, StopDist=0.12
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:55] 🟢 TXN BUY at 169.61 on 2025-10-24 12:04:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.12, StopDist=0.12
+❌ RSI > 55
+❌ ADX > 25
+❌ MACD bullish
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:26:55] 🔴 TXN SELL at 169.60 on 2025-10-24 12:14:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.12, StopDist=0.12
+✅ MACD bearish
+✅ Higher TF bearish
+❌ RSI < 45
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:26:56] 🟢 TXN BUY at 169.57 on 2025-10-24 13:02:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.06, StopDist=0.06
+✅ RSI > 55
+✅ MACD bullish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:26:57] 🔴 TXN SELL at 169.12 on 2025-10-24 13:36:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.08, StopDist=0.08
+✅ RSI < 45
+✅ MACD bearish
+✅ Volume spike
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+[2025-10-24 22:26:58] 🟢 TXN BUY at 169.05 on 2025-10-24 15:13:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.08, StopDist=0.08
+✅ Volume spike
+❌ RSI > 55
+❌ ADX > 25
+❌ MACD bullish
+❌ ATR in range
+❌ Higher TF bullish
+[2025-10-24 22:26:59] 🔴 TXN SELL at 168.94 on 2025-10-24 15:15:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.09, StopDist=0.09
+✅ RSI < 45
+✅ MACD bearish
+✅ Volume spike
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+[2025-10-24 22:26:59] 🟢 TXN BUY at 169.30 on 2025-10-24 15:45:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.10, StopDist=0.10
+✅ RSI > 55
+✅ MACD bullish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:27:00] 🔴 APLD SELL at 34.97 on 2025-10-24 10:36:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.11, StopDist=0.11
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:27:01] 🟢 APLD BUY at 33.63 on 2025-10-24 15:08:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.08, StopDist=0.08
+✅ RSI > 55
+✅ MACD bullish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:27:02] 🔴 APLD SELL at 33.12 on 2025-10-24 15:42:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.09, StopDist=0.09
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:32:29] 🔴 Market is closed — running previous-day analysis.
+[2025-10-24 22:32:31] 📊 Starting previous-day analysis for 2025-10-24
+[2025-10-24 22:37:31] 🔴 Market is closed — running previous-day analysis.
+[2025-10-24 22:37:33] 📊 Starting previous-day analysis for 2025-10-24
+[2025-10-24 22:38:00] 🔴 Market is closed — running previous-day analysis.
+[2025-10-24 22:38:02] 📊 Starting previous-day analysis for 2025-10-24
+[2025-10-24 22:52:22] 🔴 Market is closed — running previous-day analysis.
+[2025-10-24 22:54:25] 🔴 Market is closed — running previous-day analysis.
+[2025-10-24 22:54:27] 📊 Starting previous-day analysis for 2025-10-24
+[2025-10-24 22:55:11] 🔴 Market is closed — running previous-day analysis.
+[2025-10-24 22:55:14] 📊 Starting previous-day analysis for 2025-10-24
+[2025-10-24 22:55:14] 🔴 AAPL SELL at 263.26 on 2025-10-24 12:39:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.13, StopDist=0.13
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:15] 🟢 AAPL BUY at 263.67 on 2025-10-24 13:13:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.13, StopDist=0.13
+✅ RSI > 55
+✅ ADX > 25
+✅ MACD bullish
+✅ Volume spike
+❌ ATR in range
+❌ Higher TF bullish
+[2025-10-24 22:55:16] 🔴 AAPL SELL at 263.71 on 2025-10-24 14:17:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.08, StopDist=0.08
+✅ MACD bearish
+✅ Higher TF bearish
+❌ RSI < 45
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:17] 🟢 AAPL BUY at 264.03 on 2025-10-24 14:29:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.09, StopDist=0.09
+✅ RSI > 55
+✅ MACD bullish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:55:17] 🔴 AAPL SELL at 263.85 on 2025-10-24 14:49:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.11, StopDist=0.11
+✅ RSI < 45
+✅ ADX > 25
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:18] 🟢 AAPL BUY at 263.51 on 2025-10-24 15:39:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.08, StopDist=0.08
+✅ RSI > 55
+✅ MACD bullish
+✅ Volume spike
+❌ ADX > 25
+❌ ATR in range
+❌ Higher TF bullish
+[2025-10-24 22:55:19] 🔴 AAPL SELL at 263.11 on 2025-10-24 15:52:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.13, StopDist=0.13
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:20] 🔴 AXP SELL at 360.74 on 2025-10-24 11:30:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.22, StopDist=0.22
+✅ MACD bearish
+✅ Higher TF bearish
+❌ RSI < 45
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:21] 🟢 AXP BUY at 360.35 on 2025-10-24 14:26:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.15, StopDist=0.15
+✅ RSI > 55
+✅ MACD bullish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:55:22] 🔴 AXP SELL at 359.70 on 2025-10-24 15:11:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.11, StopDist=0.11
+✅ RSI < 45
+✅ MACD bearish
+✅ Volume spike
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+[2025-10-24 22:55:23] 🔴 BAC SELL at 52.47 on 2025-10-24 10:26:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.03, StopDist=0.03
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:23] 🟢 BAC BUY at 52.58 on 2025-10-24 10:45:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.04, StopDist=0.04
+✅ RSI > 55
+✅ ADX > 25
+✅ MACD bullish
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:55:24] 🔴 BAC SELL at 52.72 on 2025-10-24 12:09:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.02, StopDist=0.02
+✅ RSI < 45
+✅ MACD bearish
+✅ Volume spike
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+[2025-10-24 22:55:25] 🟢 BAC BUY at 52.59 on 2025-10-24 13:41:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.02, StopDist=0.02
+✅ RSI > 55
+✅ MACD bullish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:55:26] 🔴 BAC SELL at 52.48 on 2025-10-24 13:53:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.02, StopDist=0.02
+✅ RSI < 45
+✅ ADX > 25
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:27] 🟢 BAC BUY at 52.56 on 2025-10-24 14:14:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.01, StopDist=0.01
+✅ RSI > 55
+✅ ADX > 25
+✅ MACD bullish
+✅ Volume spike
+❌ ATR in range
+❌ Higher TF bullish
+[2025-10-24 22:55:28] 🔴 BAC SELL at 52.52 on 2025-10-24 14:38:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.01, StopDist=0.01
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:28] 🟢 BAC BUY at 52.62 on 2025-10-24 14:54:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.02, StopDist=0.02
+✅ RSI > 55
+✅ ADX > 25
+✅ MACD bullish
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:55:29] 🔴 BAC SELL at 52.57 on 2025-10-24 15:24:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.01, StopDist=0.01
+✅ MACD bearish
+✅ Higher TF bearish
+❌ RSI < 45
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:30] 🟢 NVDA BUY at 185.28 on 2025-10-24 10:45:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.14, StopDist=0.14
+✅ RSI > 55
+✅ MACD bullish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:55:31] 🔴 NVDA SELL at 184.72 on 2025-10-24 11:08:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.18, StopDist=0.18
+✅ RSI < 45
+✅ ADX > 25
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:32] 🟢 NVDA BUY at 185.39 on 2025-10-24 11:27:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.13, StopDist=0.13
+✅ RSI > 55
+✅ ADX > 25
+✅ MACD bullish
+✅ Volume spike
+❌ ATR in range
+❌ Higher TF bullish
+[2025-10-24 22:55:33] 🔴 NVDA SELL at 185.17 on 2025-10-24 12:10:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.10, StopDist=0.10
+✅ MACD bearish
+✅ Higher TF bearish
+❌ RSI < 45
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:34] 🟢 NVDA BUY at 185.16 on 2025-10-24 12:55:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.08, StopDist=0.08
+❌ RSI > 55
+❌ ADX > 25
+❌ MACD bullish
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:55:34] 🔴 NVDA SELL at 185.12 on 2025-10-24 13:10:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.06, StopDist=0.06
+✅ MACD bearish
+✅ Higher TF bearish
+❌ RSI < 45
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:35] 🟢 NVDA BUY at 185.37 on 2025-10-24 13:40:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.08, StopDist=0.08
+✅ RSI > 55
+✅ ADX > 25
+✅ MACD bullish
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:55:36] 🔴 NVDA SELL at 185.35 on 2025-10-24 14:25:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.07, StopDist=0.07
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:37] 🟢 NVDA BUY at 185.94 on 2025-10-24 15:00:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.10, StopDist=0.10
+✅ RSI > 55
+✅ ADX > 25
+✅ MACD bullish
+✅ Volume spike
+❌ ATR in range
+❌ Higher TF bullish
+[2025-10-24 22:55:38] 🔴 NVDA SELL at 186.54 on 2025-10-24 15:49:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.12, StopDist=0.12
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:38] 🟢 TXN BUY at 169.61 on 2025-10-24 12:04:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.12, StopDist=0.12
+❌ RSI > 55
+❌ ADX > 25
+❌ MACD bullish
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:55:39] 🔴 TXN SELL at 169.60 on 2025-10-24 12:14:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.12, StopDist=0.12
+✅ MACD bearish
+✅ Higher TF bearish
+❌ RSI < 45
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:40] 🟢 TXN BUY at 169.57 on 2025-10-24 13:02:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.06, StopDist=0.06
+✅ RSI > 55
+✅ MACD bullish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:55:41] 🔴 TXN SELL at 169.12 on 2025-10-24 13:36:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.08, StopDist=0.08
+✅ RSI < 45
+✅ MACD bearish
+✅ Volume spike
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+[2025-10-24 22:55:42] 🟢 TXN BUY at 169.05 on 2025-10-24 15:13:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.08, StopDist=0.08
+✅ Volume spike
+❌ RSI > 55
+❌ ADX > 25
+❌ MACD bullish
+❌ ATR in range
+❌ Higher TF bullish
+[2025-10-24 22:55:43] 🔴 TXN SELL at 168.94 on 2025-10-24 15:15:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.09, StopDist=0.09
+✅ RSI < 45
+✅ MACD bearish
+✅ Volume spike
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+[2025-10-24 22:55:44] 🟢 TXN BUY at 169.30 on 2025-10-24 15:45:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.10, StopDist=0.10
+✅ RSI > 55
+✅ MACD bullish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:55:45] 🔴 APLD SELL at 34.97 on 2025-10-24 10:36:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.11, StopDist=0.11
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+[2025-10-24 22:55:46] 🟢 APLD BUY at 33.63 on 2025-10-24 15:08:00
+Reason: SMA20 crossed above SMA50 (Bullish trend)
+ATR=0.08, StopDist=0.08
+✅ RSI > 55
+✅ MACD bullish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
+❌ Higher TF bullish
+[2025-10-24 22:55:47] 🔴 APLD SELL at 33.12 on 2025-10-24 15:42:00
+Reason: SMA20 crossed below SMA50 (Bearish trend)
+ATR=0.09, StopDist=0.09
+✅ RSI < 45
+✅ MACD bearish
+✅ Higher TF bearish
+❌ ADX > 25
+❌ ATR in range
+❌ Volume spike
