@@ -7,6 +7,10 @@ import alpaca_trade_api as tradeapi
 from datetime import datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import sys
+import ta
+from ta.trend import SMAIndicator
+from ta.volatility import AverageTrueRange
 
 # ================= CONFIG =================
 ALPACA_KEY = os.getenv("ALPACA_KEY")
@@ -348,4 +352,6 @@ if __name__ == "__main__":
         live_trading_loop(interval=5)
     elif mode == "analysis":
         previous_day_analysis()
+
+
 
