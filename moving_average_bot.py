@@ -344,7 +344,8 @@ def morning_scan():
 
 
 if __name__ == "__main__":
-    mode = sys.argv[1] if len(sys.argv) > 1 else "analysis"
+    mode = sys.argv[1] if len(sys.argv) > 1 else None
+    date_to_analyze = sys.argv[2] if len(sys.argv) > 2 else None
 
     if mode == "morning":
         morning_scan()
@@ -352,6 +353,8 @@ if __name__ == "__main__":
         live_trading_loop(interval=5)
     elif mode == "analysis":
         previous_day_analysis()
+    else:
+        previous_day_analysis(date_to_analyze)  # default
 
 
 
