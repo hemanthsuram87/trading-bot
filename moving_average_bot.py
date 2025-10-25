@@ -3,6 +3,7 @@ import time
 import pandas as pd
 import numpy as np
 import requests
+import alpaca_trade_api as tradeapi
 from datetime import datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -353,6 +354,5 @@ if __name__ == "__main__":
         previous_day_analysis()
     else:
         previous_day_analysis()
-
 
 
