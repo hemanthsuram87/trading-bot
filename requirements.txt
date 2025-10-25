@@ -1,6 +1,9 @@
-pandas
-yfinance
-requests
-schedule
 alpaca-trade-api
-alpha_vantage
+pandas
+numpy
+requests
+gspread
+oauth2client
+yfinance
+datetime
+python-dotenv
