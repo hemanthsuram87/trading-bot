@@ -1,9 +1,10 @@
+tensorflow
+scikit-learn
 alpaca-trade-api
 pandas
 numpy
-requests
 gspread
 oauth2client
-yfinance
-datetime
-python-dotenv
+requests
+ta
+pytz
