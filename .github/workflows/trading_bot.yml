@@ -5,10 +5,12 @@ on:
   workflow_dispatch:
   # Scheduled runs on weekdays (Monday through Friday)
   schedule:
-    # Morning pre-market run at 08:30 AM EST (which is 12:30 UTC during EDT, adjust if DST differs)
+    # Morning pre-market run at 08:30 AM EST (12:30 UTC)
     - cron: '30 12 * * 1-5'
-    # After-market run at 05:00 PM EST (which is 21:00 UTC during EDT)
+    # After-market run at 05:00 PM EST (21:00 UTC)
     - cron: '0 21 * * 1-5'
+    # Live trading loop every 10 minutes during market hours (14:30 UTC to 21:00 UTC)
+    - cron: '*/10 14-20 * * 1-5'
 
 jobs:
   run_trading_bot:
@@ -38,3 +40,8 @@ jobs:
         if: github.event.schedule == '0 21 * * 1-5'
         run: |
           python trading_bot.py analysis
+
+      - name: Run live trading loop
+        if: startsWith(github.event.schedule, '*/10')
+        run: |
+          python trading_bot.py live_trading_loop
