@@ -213,34 +213,98 @@ def analyze_ticker(ticker, bars):
                 save_sent_signal(signal_id)
 
 # ================= EXECUTION =================
+# Eastern Time zone
+EST = pytz.timezone("America/New_York")
+
+def get_previous_trading_day(date=None):
+    """Return the last trading day before the given date."""
+    if date is None:
+        date = datetime.now(EST).date()
+    weekday = date.weekday()
+    if weekday == 0:  # Monday
+        return date - timedelta(days=3)
+    elif weekday == 6:  # Sunday
+        return date - timedelta(days=2)
+    elif weekday == 5:  # Saturday
+        return date - timedelta(days=1)
+    else:
+        return date - timedelta(days=1)
+
+
 def previous_day_analysis():
-    today = datetime.now().date()
-    log_message(f"📊 Starting previous-day analysis for {today}")
+    today = datetime.now(EST).date()
+    now = datetime.now(EST)
+    log_message(f"📊 Starting previous-day analysis for {today} up to {now.strftime('%H:%M:%S')} EST")
+
+    summary = {}
 
     for ticker in tickers:
         try:
-            start_date = f"{today}T09:30:00-04:00"
-            end_date = f"{today}T16:00:00-04:00"
-            bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute, start=start_date, end=end_date, feed="iex").df
-            if not bars.empty:
-                analyze_ticker(ticker, bars)
-            else:
-                log_message(f"No bars for {ticker}")
+            # Try fetching today's data first
+            start_date = f"{today}T04:00:00-04:00"  # Pre-market start in EST
+            end_date = now.isoformat()
+            bars = api.get_bars(
+                ticker,
+                tradeapi.TimeFrame.Minute,
+                start=start_date,
+                end=end_date,
+                feed="iex"
+            ).df
+
+            # If no data, use previous trading day
+            if bars.empty:
+                prev_day = get_previous_trading_day(today)
+                start_date = f"{prev_day}T04:00:00-04:00"  # Pre-market
+                end_date = f"{prev_day}T20:00:00-04:00"    # After-hours
+                bars = api.get_bars(
+                    ticker,
+                    tradeapi.TimeFrame.Minute,
+                    start=start_date,
+                    end=end_date,
+                    feed="iex"
+                ).df
+                log_message(f"No data for today. Using previous trading day: {prev_day} EST")
+
+            if bars.empty:
+                log_message(f"No bars found for {ticker}")
+                summary[ticker] = {"error": "No data available"}
+                continue
+
+            # Convert timestamps to EST
+            bars.index = bars.index.tz_convert(EST)
+
+            # Separate market hours (09:30-16:00 EST) and extended hours
+            market_hours = bars.between_time("09:30", "16:00")
+            extended_hours = bars.drop(market_hours.index)
+
+            ticker_summary = {}
+
+            # Analyze market hours
+            ticker_summary['market_hours'] = analyze_ticker(ticker, market_hours) if not market_hours.empty else "No market hour data"
+
+            # Analyze extended hours
+            ticker_summary['extended_hours'] = analyze_ticker(ticker, extended_hours) if not extended_hours.empty else "No extended hour data"
+
+            summary[ticker] = ticker_summary
+
         except Exception as e:
-            log_message(f"⚠️ Error analyzing {ticker}: {e}")
+            log_message(f"Error analyzing {ticker}: {e}")
+            summary[ticker] = {"error": str(e)}
+
+    log_message("📌 Full-day analysis completed.")
+    return summary
 
 def live_trading_loop():
     log_message("🚀 Starting live trading monitoring...")
-    while market_open():
-        refresh_signal_file_daily()
-        for ticker in tickers:
-            try:
-                bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute, limit=SMA_LONG * 2, feed="iex").df
-                if not bars.empty:
-                    analyze_ticker(ticker, bars)
-            except Exception as e:
-                log_message(f"⚠️ Error analyzing {ticker}: {e}")
-        time.sleep(CHECK_INTERVAL)
+    refresh_signal_file_daily()
+    for ticker in tickers:
+        try:
+            bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute, limit=SMA_LONG * 2, feed="iex").df
+            if not bars.empty:
+                analyze_ticker(ticker, bars)
+        except Exception as e:
+            log_message(f"⚠️ Error analyzing {ticker}: {e}")
+    time.sleep(CHECK_INTERVAL)
     log_message("⏰ Market closed. Live monitoring ended.")
 
 def morning_scan():
@@ -354,5 +418,4 @@ if __name__ == "__main__":
         previous_day_analysis()
     else:
         previous_day_analysis()
-
 
