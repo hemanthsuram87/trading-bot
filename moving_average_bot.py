@@ -330,9 +330,11 @@ def live_trading_loop():
 # ================= MORNING SCAN =================
 def morning_scan():
     """
-    Morning scan: fetches last 5 days of minute bars to compute indicators,
-    evaluates bullish/bearish conditions, runs AI forecast if enough data,
-    updates Google Sheets, and sends summary to Telegram.
+    Runs morning scan:
+    - Fetches last 5 days of minute bars
+    - Detects bullish/bearish SMA crossovers
+    - Sends AI forecast and technical signals to Telegram
+    - Updates Google Sheets
     """
     log_message("🌅 Starting Morning Market Scanner...")
     potential_stocks = []
@@ -340,15 +342,13 @@ def morning_scan():
 
     for ticker in tickers:
         try:
+            # Fetch last 5 days of minute bars
             end_dt = datetime.now(EST)
             start_dt = end_dt - timedelta(days=5)
-            bars = api.get_bars(
-                ticker,
-                tradeapi.TimeFrame.Minute,
-                start=start_dt.isoformat(),
-                end=end_dt.isoformat(),
-                feed="iex"
-            ).df
+            bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute,
+                                start=start_dt.isoformat(),
+                                end=end_dt.isoformat(),
+                                feed="iex").df
 
             if bars.empty or len(bars) < 20:
                 log_message(f"⚠️ Not enough data for {ticker}, skipping")
@@ -363,10 +363,10 @@ def morning_scan():
                 if forecast:
                     ai_forecasts.append({
                         "Ticker": ticker,
-                        "Current": forecast.get("current", bars["close"].iloc[-1]),
-                        "Forecast": forecast.get("forecast", bars["close"].iloc[-1]),
-                        "Trend": forecast.get("trend", "UNKNOWN"),
-                        "Confidence": forecast.get("confidence", 0)
+                        "Current": bars["close"].iloc[-1],
+                        "Forecast": forecast["forecast"],
+                        "Trend": forecast["trend"],
+                        "Confidence": forecast["confidence"]
                     })
 
             # Compute indicators
@@ -378,44 +378,27 @@ def morning_scan():
             bars["MACD"], bars["MACD_Signal"] = compute_macd(bars["close"])
             bars["AvgVol"] = bars["volume"].rolling(20).mean()
 
+            # Last two bars for crossover
+            prev = bars.iloc[-2]
             curr = bars.iloc[-1]
 
-            # Skip if SMA50 or SMA20 is NaN
-            if np.isnan(curr["SMA20"]) or np.isnan(curr["SMA50"]):
-                log_message(f"⚠️ SMA20 or SMA50 is NaN for {ticker}, skipping")
-                continue
-
-            # Compute metrics
             sma_gap = abs((curr["SMA20"] - curr["SMA50"]) / curr["SMA50"]) * 100
             macd_gap = abs(curr["MACD"] - curr["MACD_Signal"])
             atr_pct = (curr["ATR"] / curr["close"]) * 100
             vol_ratio = curr["volume"] / curr["AvgVol"]
 
-            # Evaluate bullish/bearish readiness (loosened thresholds)
-            bullish_ready = (
-                curr["SMA20"] > curr["SMA50"] * 0.995 and
-                curr["RSI"] > 50 and
-                macd_gap < 0.5 and
-                curr["ADX"] > 15 and
-                vol_ratio > 1.0 and
-                0.3 < atr_pct < 5
-            )
-
-            bearish_ready = (
-                curr["SMA20"] < curr["SMA50"] * 1.005 and
-                curr["RSI"] < 50 and
-                macd_gap < 0.5 and
-                curr["ADX"] > 15 and
-                vol_ratio > 1.0 and
-                0.3 < atr_pct < 5
-            )
-
-            log_message(f"{ticker} | SMA20: {curr['SMA20']:.2f}, SMA50: {curr['SMA50']:.2f}, RSI: {curr['RSI']:.2f}, ADX: {curr['ADX']:.2f}")
-            log_message(f"bullish_ready: {bullish_ready}, bearish_ready: {bearish_ready}, vol_ratio: {vol_ratio:.2f}, atr_pct: {atr_pct:.2f}, macd_gap: {macd_gap:.2f}")
+            # Bullish/Bearish detection based on crossover
+            bullish_ready = prev["SMA20"] <= prev["SMA50"] and curr["SMA20"] > curr["SMA50"]
+            bearish_ready = prev["SMA20"] >= prev["SMA50"] and curr["SMA20"] < curr["SMA50"]
 
             if bullish_ready or bearish_ready:
                 direction = "BULLISH" if bullish_ready else "BEARISH"
-                score = sum([bullish_ready or bearish_ready, curr["ADX"] > 20, vol_ratio > 1.2, macd_gap < 0.3])
+                score = sum([
+                    bullish_ready or bearish_ready,
+                    curr["ADX"] > 20,
+                    vol_ratio > 1.0,
+                    macd_gap < 1.0
+                ])
                 potential_stocks.append({
                     "Ticker": ticker,
                     "Direction": direction,
@@ -430,18 +413,19 @@ def morning_scan():
         except Exception as e:
             log_message(f"⚠️ Error scanning {ticker}: {e}")
 
-    # Send AI forecast summary
+    # Send AI forecast to Telegram
     if ai_forecasts:
         msg = "🤖 *AI Forecasts Summary — Morning Scan*\n\n"
         for f in ai_forecasts:
             msg += f"{f['Ticker']}: Current {f['Current']:.2f} | Predicted {f['Forecast']:.2f} | Trend {f['Trend']} | Conf {f['Confidence']}%\n"
         send_message(msg)
 
-    # Send technical signals summary
+    # No technical signals
     if not potential_stocks:
         send_message("🌄 Morning scan complete — no potential setups found.")
         return
 
+    # Prepare top 10 signals
     df = pd.DataFrame(potential_stocks).sort_values("Score", ascending=False)
     top10 = df.head(10)
 
@@ -454,13 +438,13 @@ def morning_scan():
     except Exception as e:
         log_message(f"⚠️ Failed to update Morning_Scanner sheet: {e}")
 
-    # Send Telegram summary for top 10
+    # Send technical signals to Telegram
     msg = "🌅 *Morning Scanner — Potential Stocks for Today*\n\n"
     for _, row in top10.iterrows():
         msg += f"{row['Ticker']}: {row['Direction']} | Price: {row['Price']} | RSI: {row['RSI']} | ADX: {row['ADX']} | Vol x{row['VolSpike']} | SMA Gap: {row['SMA_Gap%']}%\n"
-
     send_message(msg)
     log_message("✅ Morning scan completed successfully.")
+
 
 
 # ================= ENTRY POINT =================
