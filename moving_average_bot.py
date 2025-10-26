@@ -25,6 +25,7 @@ api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, base_url=ALPACA_BASE_URL)
 # Telegram config
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+api_key = os.getenv("FMP_API_KEY")
 
 api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, base_url=ALPACA_BASE_URL)
 
@@ -446,35 +447,37 @@ def morning_scan():
     log_message("✅ Morning scan completed successfully.")
 
 
-def get_yahoo_top_movers():
-    gainers_url = "https://finance.yahoo.com/gainers"
-    losers_url = "https://finance.yahoo.com/losers"
+def fetch_top_movers():
+    """Fetch top gainers and losers from FMP API."""
+    api_key = "YOUR_FMP_API_KEY"  # replace with your key
+    base_url = "https://financialmodelingprep.com/api/v3/stock_market"
+    top_movers = {"gainers": [], "losers": []}
 
-    try:
-        gainers_table = pd.read_html(gainers_url)[0]
-        losers_table = pd.read_html(losers_url)[0]
-    except Exception as e:
-        print(f"⚠️ Error fetching data: {e}")
-        return None, None
-
-    gainers_table = gainers_table[['Symbol', 'Name', 'Price (Intraday)', 'Change', '% Change', 'Volume']]
-    losers_table = losers_table[['Symbol', 'Name', 'Price (Intraday)', 'Change', '% Change', 'Volume']]
-
-    return gainers_table, losers_table
+    for category in top_movers.keys():
+        url = f"{base_url}/{category}?apikey={api_key}"
+        try:
+            resp = requests.get(url)
+            if resp.status_code == 200:
+                top_movers[category] = resp.json()  # list of dicts
+            else:
+                print(f"Failed to fetch {category}: {resp.status_code}")
+        except Exception as e:
+            print(f"Error fetching {category}: {e}")
+    return top_movers["gainers"], top_movers["losers"]
 
 def send_top_movers_to_telegram(top_n=15):
-    gainers, losers = get_yahoo_top_movers()
-    if gainers is None or losers is None:
-        send_message("⚠️ Failed to fetch top movers from Yahoo Finance.")
+    gainers, losers = fetch_top_movers()
+    if not gainers and not losers:
+        send_message("⚠️ Failed to fetch top movers from FMP.")
         return
 
     msg = "📈 *Top Gainers*\n"
-    for i, row in gainers.head(top_n).iterrows():
-        msg += f"{row['Symbol']} | {row['Price (Intraday)']} | {row['% Change']}\n"
+    for stock in gainers[:top_n]:
+        msg += f"{stock['symbol']} | {stock['price']} | {stock['changesPercentage']}\n"
 
     msg += "\n📉 *Top Losers*\n"
-    for i, row in losers.head(top_n).iterrows():
-        msg += f"{row['Symbol']} | {row['Price (Intraday)']} | {row['% Change']}\n"
+    for stock in losers[:top_n]:
+        msg += f"{stock['symbol']} | {stock['price']} | {stock['changesPercentage']}\n"
 
     send_message(msg)
     print("✅ Top movers sent to Telegram.")
