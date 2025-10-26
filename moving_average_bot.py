@@ -93,7 +93,7 @@ def compute_macd(close):
 
 # ================= GOOGLE SHEETS SETUP =================
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scope)
 client = gspread.authorize(creds)
 sheet = client.open("Daily_stocks")
 tickers_ws = sheet.worksheet("Tickers")
@@ -446,6 +446,38 @@ def morning_scan():
     log_message("✅ Morning scan completed successfully.")
 
 
+def get_yahoo_top_movers():
+    gainers_url = "https://finance.yahoo.com/gainers"
+    losers_url = "https://finance.yahoo.com/losers"
+
+    try:
+        gainers_table = pd.read_html(gainers_url)[0]
+        losers_table = pd.read_html(losers_url)[0]
+    except Exception as e:
+        print(f"⚠️ Error fetching data: {e}")
+        return None, None
+
+    gainers_table = gainers_table[['Symbol', 'Name', 'Price (Intraday)', 'Change', '% Change', 'Volume']]
+    losers_table = losers_table[['Symbol', 'Name', 'Price (Intraday)', 'Change', '% Change', 'Volume']]
+
+    return gainers_table, losers_table
+
+def send_top_movers_to_telegram(top_n=15):
+    gainers, losers = get_yahoo_top_movers()
+    if gainers is None or losers is None:
+        send_message("⚠️ Failed to fetch top movers from Yahoo Finance.")
+        return
+
+    msg = "📈 *Top Gainers*\n"
+    for i, row in gainers.head(top_n).iterrows():
+        msg += f"{row['Symbol']} | {row['Price (Intraday)']} | {row['% Change']}\n"
+
+    msg += "\n📉 *Top Losers*\n"
+    for i, row in losers.head(top_n).iterrows():
+        msg += f"{row['Symbol']} | {row['Price (Intraday)']} | {row['% Change']}\n"
+
+    send_message(msg)
+    print("✅ Top movers sent to Telegram.")
 
 # ================= ENTRY POINT =================
 if __name__ == "__main__":
@@ -458,5 +490,6 @@ if __name__ == "__main__":
         live_trading_loop()
     elif mode == "morning":
         morning_scan()
+        send_top_movers_to_telegram(top_n=15)
     else:
         log_message(f"Unknown mode: {mode}")
