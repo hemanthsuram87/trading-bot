@@ -1,97 +1,39 @@
-name: 📊 Daily Trading Automation (Morning + Live + EOD)
+name: Trading Bot Schedule
 
 on:
-  schedule:
-    - cron: "30 12 * * 1-5"   # Morning scan
-    - cron: "*/5 13-20 * * 1-5"  # Live trading
-    - cron: "15 20 * * 1-5"   # End-of-day
+  # Manual trigger
   workflow_dispatch:
+  # Scheduled runs on weekdays (Monday through Friday)
+  schedule:
+    # Morning pre-market run at 08:30 AM EST (which is 12:30 UTC during EDT, adjust if DST differs)
+    - cron: '30 12 * * 1-5'
+    # After-market run at 05:00 PM EST (which is 21:00 UTC during EDT)
+    - cron: '0 21 * * 1-5'
 
-permissions:
-  contents: write
-  
 jobs:
-  trading_automation:
+  run_trading_bot:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 🧾 Checkout repo
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 🐍 Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: ⚡ Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-
-      - name: 📦 Install dependencies (including ta)
+      - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ta
-          pip install alpaca-trade-api alpha_vantage
 
-      - name: 🔑 Create Google credentials file
-        run: echo '${{ secrets.SERVICE_ACCOUNT_JSON }}' > google_creds.json
-
-      - name: 🧠 Determine which phase to run
-        id: phase
+      - name: Run morning scan
+        if: github.event.schedule == '30 12 * * 1-5'
         run: |
-          HOUR=$(date -u +"%H")
-          MIN=$(date -u +"%M")
-          if [ "$HOUR" -eq 12 ] && [ "$MIN" -ge 30 ] && [ "$MIN" -lt 35 ]; then
-            PHASE="morning"
-          elif [ "$HOUR" -ge 13 ] && [ "$HOUR" -lt 20 ]; then
-            PHASE="live"
-          elif [ "$HOUR" -eq 20 ] && [ "$MIN" -ge 10 ]; then
-            PHASE="eod"
-          else
-            PHASE="eod"
-          fi
-          echo "phase=$PHASE" >> $GITHUB_OUTPUT
+          python trading_bot.py morning
 
-      - name: 🚀 Run Morning Scan
-        if: steps.phase.outputs.phase == 'morning'
-        env:
-          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
-          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GOOGLE_CREDS_FILE: "google_creds.json"
-        run: python moving_average_bot.py morning
-
-      - name: 📈 Run Live Trading (every 5 min)
-        if: steps.phase.outputs.phase == 'live'
-        env:
-          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
-          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GOOGLE_CREDS_FILE: "google_creds.json"
-        run: python moving_average_bot.py live
-
-      - name: 📊 Run End-of-Day Analysis
-        if: steps.phase.outputs.phase == 'eod'
-        env:
-          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
-          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GOOGLE_CREDS_FILE: "google_creds.json"
-        run: python moving_average_bot.py analysis
-
-      - name: 💾 Commit logs (optional)
-        if: always()
+      - name: Run previous-day analysis
+        if: github.event.schedule == '0 21 * * 1-5'
         run: |
-          git config user.email "actions@github.com"
-          git config user.name "GitHub Actions Bot"
-          git remote set-url origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/hemanthsuram87/trading-bot.git
-          # Only add if files/folders exist
-          git add logs/* signals/* || echo "No logs or signals to add"
-          git commit -m "Auto-update logs $(date -u)" || echo "No changes to commit"
-          git push || echo "Nothing to push"
-
+          python trading_bot.py analysis
