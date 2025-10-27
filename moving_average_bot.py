@@ -515,26 +515,29 @@ def deep_learning_forecast(ticker, bars, sheet, lookback=60, forecast_steps=1, r
         return None
 
 # ================= PREVIOUS DAY ANALYSIS =================
-def previous_day_analysis():
+ef previous_day_analysis():
     now = datetime.now(EST)
     today = now.date()
     weekday = today.weekday()  # Monday=0, Sunday=6
 
-    # --- Determine correct date range ---
-    if weekday >= 5:  # Saturday (5) or Sunday (6)
-        # Go back to last Friday
+    # --- Determine analysis day ---
+    if weekday >= 5:  # Weekend
+        # Saturday (5) or Sunday (6) → use last Friday
         last_trading_day = today - timedelta(days=weekday - 4)
         analysis_day_label = "Previous Trading Day (Friday)"
     else:
-        # Regular weekday — analyze today
         last_trading_day = today
         analysis_day_label = "Current Trading Day"
 
-    # Market hours
-    start_date = last_trading_day.strftime("%Y-%m-%dT09:30:00-04:00")
-    end_date = now.strftime("%Y-%m-%dT%H:%M:%S-04:00")
+    # --- Trading hours window ---
+    start_dt = datetime.combine(last_trading_day, time(9, 30), tzinfo=EST)
+    end_dt = datetime.combine(last_trading_day, time(16, 0), tzinfo=EST)
 
-    log_message(f"📊 Running {analysis_day_label} analysis...")
+    # Convert to ISO format for Alpaca
+    start_date = start_dt.strftime("%Y-%m-%dT%H:%M:%S-04:00")
+    end_date = end_dt.strftime("%Y-%m-%dT%H:%M:%S-04:00")
+
+    log_message(f"📊 Running {analysis_day_label} analysis from {start_date} to {end_date} ...")
 
     ai_forecasts = []
     for ticker in tickers:
@@ -558,25 +561,6 @@ def previous_day_analysis():
 
         except Exception as e:
             log_message(f"Error fetching bars for {ticker}: {e}")
-
-    # --- Send Telegram Summary ---
-    if ai_forecasts:
-        msg = f"🤖 *AI Forecasts Summary — {analysis_day_label}*\n\n"
-        for f in ai_forecasts:
-            reason = (
-                "Predicted price > current price → Possible BUY"
-                if f['trend'] == "BULLISH"
-                else "Predicted price < current price → Possible SELL"
-            )
-            msg += (
-                f"{f['ticker']}: Current {f['current']:.2f} | "
-                f"Predicted {f['forecast']:.2f} | "
-                f"Trend {f['trend']} ({reason}) | "
-                f"Conf {f['confidence']}%\n"
-            )
-        send_message(msg)
-
-    log_message(f"📌 {analysis_day_label} analysis completed.")
 
 # ================= LIVE TRADING LOOP =================
 def live_trading_loop():
