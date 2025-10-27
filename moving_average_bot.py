@@ -1,25 +1,21 @@
 import os
 import time
 import pytz
+import json
+import requests
 import numpy as np
 import pandas as pd
-import requests
-import alpaca_trade_api as tradeapi
-from datetime import datetime, timedelta
-from ta.momentum import RSIIndicator
-from ta.trend import MACD, SMAIndicator, ADXIndicator
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_squared_error
-from sklearn.model_selection import train_test_split
-from tensorflow.keras.models import Sequential,load_model
-from tensorflow.keras.layers import LSTM, Dense
-from tensorflow.keras.callbacks import EarlyStopping
+from datetime import datetime, timedelta, time as dt_time
 import tensorflow as tf
+from tensorflow.keras.models import load_model
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras import Sequential
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import ta
-from ta.volatility import AverageTrueRange
-import yfinance as yf
 import logging
 
 # ================= CONFIG =================
