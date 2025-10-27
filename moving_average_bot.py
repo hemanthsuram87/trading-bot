@@ -469,7 +469,7 @@ def previous_day_analysis():
 
 # ================= LIVE TRADING LOOP (single-run job) =================
 def live_trading_loop():
-    log_message("🚀 Starting live trading loop run")
+    log_message("🚀 Starting live trading loop v2 (hybrid scoring + risk control)")
     now = datetime.now(EST)
     log_message(f"📈 Running live analysis at {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -478,6 +478,12 @@ def live_trading_loop():
         return
 
     summary_messages = []
+
+    # configuration for scoring & risk
+    VOL_MULTIPLIER = 1.5      # volume surge multiplier
+    BREAKOUT_LOOKBACK = 50    # lookback for breakout high/low
+    ROC_PERIOD = 10           # % change period for momentum check
+    MIN_BARS = max(SMA_LONG, 60, BREAKOUT_LOOKBACK, ROC_PERIOD)  # require enough bars
 
     for ticker in tickers:
         try:
@@ -493,109 +499,218 @@ def live_trading_loop():
                 feed="iex"
             ).df
 
-            if bars.empty:
-                log_message(f"⚠️ No market data for {ticker}")
+            if bars.empty or len(bars) < MIN_BARS:
+                log_message(f"⚠️ Not enough market data for {ticker} (have {len(bars)} bars, need {MIN_BARS})")
                 continue
 
-            bars = safe_tz_localize_and_convert(bars)
+            bars = safe_tz_localize_and_convert(bars.copy())
 
-            # ===== Technical Indicators =====
+            # --- Indicators / features
             bars["SMA20"] = bars["close"].rolling(SMA_SHORT).mean()
             bars["SMA50"] = bars["close"].rolling(SMA_LONG).mean()
             bars["RSI"] = compute_rsi(bars["close"], 14)
             bars["ATR"] = compute_atr(bars[["high", "low", "close"]], ATR_PERIOD)
+            bars["Vol_MA20"] = bars["volume"].rolling(20).mean()
             macd, macd_signal = compute_macd(bars["close"])
+            bars["MACD"] = macd
+            bars["MACD_SIGNAL"] = macd_signal
+            bars["ROC"] = bars["close"].pct_change(ROC_PERIOD) * 100
 
-            adx_indicator = ADXIndicator(bars["high"], bars["low"], bars["close"], window=14)
-            adx = adx_indicator.adx().iloc[-1] if len(bars) >= 14 else np.nan
+            # ADX (safe)
+            try:
+                adx_indicator = ADXIndicator(bars["high"], bars["low"], bars["close"], window=14)
+                bars["ADX"] = adx_indicator.adx()
+            except Exception:
+                bars["ADX"] = np.nan
 
             latest = bars.iloc[-1]
-            sma20, sma50 = bars["SMA20"].iloc[-1], bars["SMA50"].iloc[-1]
-            rsi = bars["RSI"].iloc[-1]
-            atr = bars["ATR"].iloc[-1]
-            macd_latest = macd.iloc[-1]
-            macd_signal_latest = macd_signal.iloc[-1]
 
-            # ===== AI Forecast =====
-            forecast_result = deep_learning_forecast(ticker, bars, sheet if 'sheet' in globals() else None)
-            if forecast_result:
-                forecast_price = forecast_result["forecast"]
-                current_price = forecast_result["current"]
-                trend = forecast_result["trend"]
-                confidence = forecast_result["confidence"]
+            # safe extraction (avoid scalar .rolling on single value)
+            sma20 = float(bars["SMA20"].iloc[-1]) if not pd.isna(bars["SMA20"].iloc[-1]) else np.nan
+            sma50 = float(bars["SMA50"].iloc[-1]) if not pd.isna(bars["SMA50"].iloc[-1]) else np.nan
+            rsi = float(bars["RSI"].iloc[-1]) if not pd.isna(bars["RSI"].iloc[-1]) else np.nan
+            atr = float(bars["ATR"].iloc[-1]) if not pd.isna(bars["ATR"].iloc[-1]) else np.nan
+            vol_ma = float(bars["Vol_MA20"].iloc[-1]) if not pd.isna(bars["Vol_MA20"].iloc[-1]) else np.nan
+            volume_surge = (latest["volume"] > VOL_MULTIPLIER * (vol_ma if vol_ma > 0 else 1))
+            macd_latest = float(bars["MACD"].iloc[-1]) if not pd.isna(bars["MACD"].iloc[-1]) else np.nan
+            macd_signal_latest = float(bars["MACD_SIGNAL"].iloc[-1]) if not pd.isna(bars["MACD_SIGNAL"].iloc[-1]) else np.nan
+            roc = float(bars["ROC"].iloc[-1]) if not pd.isna(bars["ROC"].iloc[-1]) else 0.0
+            adx = float(bars["ADX"].iloc[-1]) if not pd.isna(bars["ADX"].iloc[-1]) else np.nan
+
+            # breakout detection (compare to previous high/low over lookback, exclude current bar)
+            if len(bars) >= BREAKOUT_LOOKBACK + 1:
+                lookback_high = bars["high"].rolling(BREAKOUT_LOOKBACK).max().iloc[-2]
+                lookback_low = bars["low"].rolling(BREAKOUT_LOOKBACK).min().iloc[-2]
+                breakout_up = latest["close"] > (lookback_high if not pd.isna(lookback_high) else float("inf"))
+                breakout_down = latest["close"] < (lookback_low if not pd.isna(lookback_low) else float("-inf"))
             else:
-                forecast_price = current_price = trend = confidence = None
+                breakout_up = breakout_down = False
 
-            # ===== Signal Logic =====
-            signal_reason = []
+            # --- AI forecast (weighted) ---
+            forecast_result = deep_learning_forecast(ticker, bars, sheet if 'sheet' in globals() else None)
+            ai_trend = None
+            ai_conf = 0.0
+            if forecast_result:
+                ai_trend = forecast_result.get("trend")
+                ai_conf = float(forecast_result.get("confidence", 0.0))
+
+            # --- Composite scoring (weighted) ---
+            score = 0.0
+            reasons = []
+
+            # Feature: SMA alignment
+            if sma20 > sma50:
+                score += 1.0
+                reasons.append("SMA20 > SMA50 (trend up) [+1]")
+            else:
+                reasons.append("SMA20 <= SMA50 (no uptrend) [+0]")
+
+            # Feature: MACD momentum
+            if macd_latest > macd_signal_latest:
+                score += 1.0
+                reasons.append("MACD > Signal (momentum up) [+1]")
+            else:
+                reasons.append("MACD <= Signal (momentum weak) [+0]")
+
+            # Feature: ADX strength
+            if not pd.isna(adx) and adx > 25:
+                score += 0.5
+                reasons.append(f"ADX {adx:.1f} (trend strong) [+0.5]")
+            else:
+                reasons.append(f"ADX {adx if not pd.isna(adx) else 'n/a'} (trend weak) [+0]")
+
+            # Feature: Volume confirmation
+            if volume_surge:
+                score += 0.5
+                reasons.append(f"Volume surge (x{latest['volume'] / (vol_ma if vol_ma>0 else 1):.2f}) [+0.5]")
+            else:
+                reasons.append("No strong volume confirmation [+0]")
+
+            # Feature: ROC momentum
+            if roc > 0.5:
+                score += 0.3
+                reasons.append(f"ROC +{roc:.2f}% (momentum up) [+0.3]")
+            elif roc < -0.5:
+                score -= 0.3
+                reasons.append(f"ROC {roc:.2f}% (momentum down) [-0.3]")
+            else:
+                reasons.append(f"ROC {roc:.2f}% (neutral) [+0]")
+
+            # Feature: Breakout
+            if breakout_up:
+                score += 0.7
+                reasons.append(f"Price broke above {BREAKOUT_LOOKBACK}-bar high (breakout) [+0.7]")
+            if breakout_down:
+                score -= 0.7
+                reasons.append(f"Price broke below {BREAKOUT_LOOKBACK}-bar low (down breakout) [-0.7]")
+
+            # Feature: RSI guard
+            if not pd.isna(rsi):
+                if rsi > 70:
+                    score -= 0.5
+                    reasons.append(f"RSI {rsi:.1f} (overbought) [-0.5]")
+                elif rsi < 30:
+                    score += 0.4
+                    reasons.append(f"RSI {rsi:.1f} (oversold) [+0.4]")
+                else:
+                    reasons.append(f"RSI {rsi:.1f} (neutral) [+0]")
+
+            # Feature: AI weighting (probabilistic)
+            if ai_trend == "BULLISH" or ai_trend == "Up":
+                ai_weight = (ai_conf / 100.0) * 1.0  # up to +1.0
+                score += ai_weight
+                reasons.append(f"AI bullish {ai_conf:.1f}% [+{ai_weight:.2f}]")
+            elif ai_trend == "BEARISH" or ai_trend == "Down":
+                ai_weight = (ai_conf / 100.0) * 1.0
+                score -= ai_weight
+                reasons.append(f"AI bearish {ai_conf:.1f}% [-{ai_weight:.2f}]")
+            else:
+                reasons.append("AI neutral or unavailable [+0]")
+
+            # Normalize / clamp score for readability
+            score = float(score)
+            reasons.append(f"Composite score = {score:.2f}")
+
+            # --- Decision thresholds (tunable) ---
+            # These thresholds are conservative by default
+            BUY_THRESHOLD = 2.0
+            STRONG_BUY_THRESHOLD = 3.0
+            SELL_THRESHOLD = -1.5
+
             action = "HOLD"
-
-            if sma20 > sma50 and macd_latest > macd_signal_latest and rsi < 70 and adx > 20:
+            if score >= STRONG_BUY_THRESHOLD:
+                action = "STRONG BUY"
+            elif score >= BUY_THRESHOLD:
                 action = "BUY"
-                signal_reason.append("SMA20 crossed above SMA50 (bullish)")
-                signal_reason.append("MACD bullish crossover")
-                signal_reason.append(f"RSI healthy at {rsi:.1f}")
-                signal_reason.append(f"ADX {adx:.1f} shows trend strength")
-
-                if trend == "Up" and confidence >= 60:
-                    signal_reason.append(f"AI confirms upward momentum ({confidence}% confidence)")
-
-            elif sma20 < sma50 and macd_latest < macd_signal_latest and rsi > 30 and adx > 20:
+            elif score <= SELL_THRESHOLD:
                 action = "SELL"
-                signal_reason.append("SMA20 crossed below SMA50 (bearish)")
-                signal_reason.append("MACD bearish crossover")
-                signal_reason.append(f"RSI weakening at {rsi:.1f}")
-                signal_reason.append(f"ADX {adx:.1f} indicates strong downtrend")
-
-                if trend == "Down" and confidence >= 60:
-                    signal_reason.append(f"AI confirms downward momentum ({confidence}% confidence)")
-
             else:
                 action = "HOLD"
-                signal_reason.append("Mixed or neutral signals — waiting for confirmation.")
 
-            # ===== Technical Summary =====
+            # --- ATR-based SL/TP (risk management) ---
+            if not pd.isna(atr) and atr > 0:
+                sl = latest["close"] - 1.5 * atr if action in ("BUY", "STRONG BUY") else latest["close"] + 1.5 * atr
+                tp = latest["close"] + 3.0 * atr if action in ("BUY", "STRONG BUY") else latest["close"] - 3.0 * atr
+                rr = (tp - latest["close"]) / (latest["close"] - sl) if (latest["close"] - sl) != 0 else float("inf")
+                reasons.append(f"SL ${sl:.2f} | TP ${tp:.2f} | R:R {rr:.2f}")
+            else:
+                sl = tp = rr = None
+                reasons.append("ATR not available — no SL/TP calculated")
+
+            # --- Compose human-friendly message ---
             technical_summary = (
-                f"• Close ${latest['close']:.2f} | "
-                f"SMA20 {sma20:.2f} / SMA50 {sma50:.2f}\n"
-                f"• RSI {rsi:.1f} | ATR {atr:.2f} | MACD {macd_latest:.2f}/{macd_signal_latest:.2f} | ADX {adx:.1f}"
+                f"• Close ${latest['close']:.2f} | SMA20 {sma20:.2f} / SMA50 {sma50:.2f}\n"
+                f"• RSI {rsi:.1f} | ATR {atr:.2f} | MACD {macd_latest:.3f}/{macd_signal_latest:.3f} | ADX {adx:.1f if not pd.isna(adx) else 'n/a'}\n"
+                f"• Volume {latest['volume']:,} (MA20 {vol_ma:,.0f}) | ROC {roc:.2f}%"
             )
 
-            forecast_summary = (
-                f"• AI Forecast: ${current_price:.2f} → ${forecast_price:.2f} ({trend}, {confidence}% confidence)"
-                if forecast_result else "• AI Forecast: N/A"
-            )
+            ai_line = f"• AI Forecast: {ai_trend or 'N/A'} ({ai_conf:.1f}% confidence)" if forecast_result else "• AI Forecast: N/A"
 
-            signal_summary = f"🔔 *Signal: {action}*\n" + "\n".join(f"→ {r}" for r in signal_reason)
+            # Build reason text with bullets
+            reasons_text = "\n".join(f"→ {r}" for r in reasons)
 
             ticker_msg = (
                 f"📊 *{ticker}*\n"
                 f"{technical_summary}\n"
-                f"{forecast_summary}\n\n"
-                f"{signal_summary}"
+                f"{ai_line}\n\n"
+                f"🔔 *Decision: {action}*  (score {score:.2f})\n\n"
+                f"🧠 *Why:*\n{reasons_text}\n"
             )
 
+            # Optionally include SL/TP in top line if present
+            if sl and tp:
+                ticker_msg += f"\n⛑️ SL: ${sl:.2f} | 🎯 TP: ${tp:.2f} | R:R: {rr:.2f}\n"
+
+            # Append & log
             summary_messages.append(ticker_msg)
-            log_message(f"{ticker}: {action} — {', '.join(signal_reason)}")
+            log_message(f"{ticker} decision={action} score={score:.2f} | {', '.join(reasons[:3])}...")
 
         except Exception as e:
             log_message(f"❌ Error processing {ticker}: {e}")
             continue
 
-    # ===== Send to Telegram =====
+    # --- Send consolidated message (Telegram + Email optional) ---
     if summary_messages:
-        msg = f"📈 *AI + Technical Live Scan — {now.strftime('%b %d %H:%M')}*\n\n" + "\n\n".join(summary_messages)
+        header = f"📈 *Hybrid AI+Technical Live Scan — {now.strftime('%b %d %H:%M')}*\n\n"
+        msg = header + "\n\n".join(summary_messages)
         send_message(msg)
-        log_message("📩 Sent consolidated summary to Telegram")
+        try:
+            # optional email too (only if configured)
+            if EMAIL_SMTP and EMAIL_FROM and EMAIL_TO:
+                send_email(f"Live Scan — {now.strftime('%Y-%m-%d %H:%M')}", msg)
+        except Exception as e:
+            log_message(f"⚠️ Email send failed: {e}")
+        log_message("📩 Sent consolidated summary to Telegram (and email if configured)")
     else:
         log_message("ℹ️ No actionable signals this run.")
 
-    # ===== Auto Position Management =====
+    # --- Auto Position Management (close losers etc.) ---
     try:
         manage_positions()
         log_message("✅ Position management complete")
     except Exception as e:
         log_message(f"⚠️ manage_positions failed: {e}")
+
 
 
 def interpret_signals(ticker, sma20, sma50, rsi, macd, macd_signal, adx, trend, forecast_conf):
