@@ -472,70 +472,178 @@ def live_trading_loop():
     log_message("🚀 Starting live trading loop run")
     now = datetime.now(EST)
     log_message(f"📈 Running live analysis at {now.strftime('%Y-%m-%d %H:%M:%S')}")
+
     if now.weekday() >= 5:
-        log_message("ℹ️ Weekend — skipping.")
+        log_message("ℹ️ Weekend detected — skipping.")
         return
 
     summary_messages = []
+
     for ticker in tickers:
         try:
+            log_message(f"🔍 Analyzing {ticker}...")
+
             end = datetime.now(EST)
             start = end - timedelta(hours=6)
-            bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute, start=start.isoformat(), end=end.isoformat(), feed="iex").df
+            bars = api.get_bars(
+                ticker,
+                tradeapi.TimeFrame.Minute,
+                start=start.isoformat(),
+                end=end.isoformat(),
+                feed="iex"
+            ).df
+
             if bars.empty:
                 log_message(f"⚠️ No market data for {ticker}")
                 continue
+
             bars = safe_tz_localize_and_convert(bars)
-            # Ensure indicators are calculated on bars DataFrame
+
+            # ===== Technical Indicators =====
             bars["SMA20"] = bars["close"].rolling(SMA_SHORT).mean()
             bars["SMA50"] = bars["close"].rolling(SMA_LONG).mean()
             bars["RSI"] = compute_rsi(bars["close"], 14)
-            bars["ATR"] = compute_atr(bars[["high","low","close"]], ATR_PERIOD)
+            bars["ATR"] = compute_atr(bars[["high", "low", "close"]], ATR_PERIOD)
             macd, macd_signal = compute_macd(bars["close"])
-            macd_latest = macd.iloc[-1] if len(macd) else np.nan
-            macd_signal_latest = macd_signal.iloc[-1] if len(macd_signal) else np.nan
+
             adx_indicator = ADXIndicator(bars["high"], bars["low"], bars["close"], window=14)
             adx = adx_indicator.adx().iloc[-1] if len(bars) >= 14 else np.nan
+
             latest = bars.iloc[-1]
-            # Use DataFrame SMA values (not scalar .rolling on single value)
-            sma20 = bars["SMA20"].iloc[-1] if "SMA20" in bars else np.nan
-            sma50 = bars["SMA50"].iloc[-1] if "SMA50" in bars else np.nan
-            rsi = bars["RSI"].iloc[-1] if "RSI" in bars and not pd.isna(bars["RSI"].iloc[-1]) else np.nan
-            atr = bars["ATR"].iloc[-1] if "ATR" in bars and not pd.isna(bars["ATR"].iloc[-1]) else np.nan
+            sma20, sma50 = bars["SMA20"].iloc[-1], bars["SMA50"].iloc[-1]
+            rsi = bars["RSI"].iloc[-1]
+            atr = bars["ATR"].iloc[-1]
+            macd_latest = macd.iloc[-1]
+            macd_signal_latest = macd_signal.iloc[-1]
 
-            technical_summary = (
-                f"• Close ${latest['close']:.2f} | "
-                f"SMA20 {sma20:.2f} / SMA50 {sma50:.2f} | "
-                f"RSI {rsi:.1f} | ATR {atr:.2f} | "
-                f"MACD {macd_latest:.2f}/{macd_signal_latest:.2f} | ADX {adx:.1f}"
-            )
-
+            # ===== AI Forecast =====
             forecast_result = deep_learning_forecast(ticker, bars, sheet if 'sheet' in globals() else None)
             if forecast_result:
+                forecast_price = forecast_result["forecast"]
+                current_price = forecast_result["current"]
                 trend = forecast_result["trend"]
-                forecast_summary = f"• AI Forecast: Current ${forecast_result['current']:.2f} → Forecast ${forecast_result['forecast']:.2f} | Trend {trend} | Conf {forecast_result['confidence']}%"
+                confidence = forecast_result["confidence"]
             else:
-                forecast_summary = "• AI Forecast: N/A"
+                forecast_price = current_price = trend = confidence = None
 
-            ticker_msg = f"📊 *{ticker}*\n{technical_summary}\n{forecast_summary}"
+            # ===== Signal Logic =====
+            signal_reason = []
+            action = "HOLD"
+
+            if sma20 > sma50 and macd_latest > macd_signal_latest and rsi < 70 and adx > 20:
+                action = "BUY"
+                signal_reason.append("SMA20 crossed above SMA50 (bullish)")
+                signal_reason.append("MACD bullish crossover")
+                signal_reason.append(f"RSI healthy at {rsi:.1f}")
+                signal_reason.append(f"ADX {adx:.1f} shows trend strength")
+
+                if trend == "Up" and confidence >= 60:
+                    signal_reason.append(f"AI confirms upward momentum ({confidence}% confidence)")
+
+            elif sma20 < sma50 and macd_latest < macd_signal_latest and rsi > 30 and adx > 20:
+                action = "SELL"
+                signal_reason.append("SMA20 crossed below SMA50 (bearish)")
+                signal_reason.append("MACD bearish crossover")
+                signal_reason.append(f"RSI weakening at {rsi:.1f}")
+                signal_reason.append(f"ADX {adx:.1f} indicates strong downtrend")
+
+                if trend == "Down" and confidence >= 60:
+                    signal_reason.append(f"AI confirms downward momentum ({confidence}% confidence)")
+
+            else:
+                action = "HOLD"
+                signal_reason.append("Mixed or neutral signals — waiting for confirmation.")
+
+            # ===== Technical Summary =====
+            technical_summary = (
+                f"• Close ${latest['close']:.2f} | "
+                f"SMA20 {sma20:.2f} / SMA50 {sma50:.2f}\n"
+                f"• RSI {rsi:.1f} | ATR {atr:.2f} | MACD {macd_latest:.2f}/{macd_signal_latest:.2f} | ADX {adx:.1f}"
+            )
+
+            forecast_summary = (
+                f"• AI Forecast: ${current_price:.2f} → ${forecast_price:.2f} ({trend}, {confidence}% confidence)"
+                if forecast_result else "• AI Forecast: N/A"
+            )
+
+            signal_summary = f"🔔 *Signal: {action}*\n" + "\n".join(f"→ {r}" for r in signal_reason)
+
+            ticker_msg = (
+                f"📊 *{ticker}*\n"
+                f"{technical_summary}\n"
+                f"{forecast_summary}\n\n"
+                f"{signal_summary}"
+            )
+
             summary_messages.append(ticker_msg)
+            log_message(f"{ticker}: {action} — {', '.join(signal_reason)}")
 
         except Exception as e:
             log_message(f"❌ Error processing {ticker}: {e}")
             continue
 
+    # ===== Send to Telegram =====
     if summary_messages:
-        msg = f"📈 *AI + Technical Scan — {now.strftime('%b %d %H:%M')}*\n\n" + "\n\n".join(summary_messages)
+        msg = f"📈 *AI + Technical Live Scan — {now.strftime('%b %d %H:%M')}*\n\n" + "\n\n".join(summary_messages)
         send_message(msg)
-        log_message("📩 Sent consolidated summary")
+        log_message("📩 Sent consolidated summary to Telegram")
     else:
-        log_message("ℹ️ No messages this run.")
+        log_message("ℹ️ No actionable signals this run.")
 
-    # Manage positions (auto-close)
+    # ===== Auto Position Management =====
     try:
         manage_positions()
+        log_message("✅ Position management complete")
     except Exception as e:
         log_message(f"⚠️ manage_positions failed: {e}")
+
+
+def interpret_signals(ticker, sma20, sma50, rsi, macd, macd_signal, adx, trend, forecast_conf):
+    explanations = []
+    signal = "HOLD"
+
+    # SMA Crossover logic
+    if sma20 > sma50:
+        explanations.append("📈 SMA20 crossed above SMA50 → bullish trend forming")
+        signal = "BUY"
+    elif sma20 < sma50:
+        explanations.append("📉 SMA20 below SMA50 → bearish trend likely")
+        signal = "SELL"
+
+    # RSI
+    if rsi < 30:
+        explanations.append("💎 RSI < 30 → oversold zone, potential rebound")
+        signal = "BUY"
+    elif rsi > 70:
+        explanations.append("🔥 RSI > 70 → overbought zone, risk of pullback")
+        signal = "SELL"
+
+    # MACD
+    if macd > macd_signal:
+        explanations.append("⚡ MACD above signal → short-term momentum up")
+        signal = "BUY"
+    elif macd < macd_signal:
+        explanations.append("💤 MACD below signal → weakening momentum")
+        signal = "SELL"
+
+    # ADX strength
+    if adx >= 25:
+        explanations.append("💪 ADX > 25 → strong trend detected")
+    elif adx < 20:
+        explanations.append("😴 ADX < 20 → weak / sideways trend")
+
+    # AI forecast
+    if trend == "Up" and forecast_conf >= 60:
+        explanations.append(f"🤖 AI Forecast → {trend} trend with {forecast_conf}% confidence")
+        signal = "BUY"
+    elif trend == "Down" and forecast_conf >= 60:
+        explanations.append(f"🤖 AI Forecast → {trend} trend with {forecast_conf}% confidence")
+        signal = "SELL"
+    else:
+        explanations.append(f"🤖 AI Forecast → Neutral/Uncertain ({forecast_conf}%)")
+
+    return signal, explanations
+
 
 # ================= MORNING SCAN =================
 def morning_scan():
