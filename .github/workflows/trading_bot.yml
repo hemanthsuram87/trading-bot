@@ -30,6 +30,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pandas lxml html5lib yfinance
+          
+      - name: 🔑 Create Google credentials file
+        run: echo '${{ secrets.SERVICE_ACCOUNT_JSON }}' > google_creds.json
 
       - name: Run morning scan
         if: github.event_name == 'schedule' && github.event.schedule == '30 12 * * 1-5'
