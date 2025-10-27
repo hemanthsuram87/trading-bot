@@ -1,22 +1,23 @@
 name: Trading Bot Schedule
 
 on:
+  # Manual trigger
   workflow_dispatch:
-    inputs:
-      mode:
-        description: 'Mode to run (analysis | live | morning)'
-        required: false
-        default: 'analysis'
+  # Scheduled runs on weekdays (Monday through Friday)
   schedule:
-    - cron: '30 12 * * 1-5'   # 08:30 EST morning (pre-market)
-    - cron: '0 21 * * 1-5'    # 17:00 EST after-market
-    - cron: '*/10 14-20 * * 1-5'  # every 10 minutes during market hours (14:30-21:00 UTC)
+    # Morning pre-market run at 08:30 AM EST (12:30 UTC)
+    - cron: '30 12 * * 1-5'
+    # After-market run at 05:00 PM EST (21:00 UTC)
+    - cron: '0 21 * * 1-5'
+    # Live trading loop every 10 minutes during market hours (14:30 UTC to 21:00 UTC)
+    - cron: '*/10 14-20 * * 1-5'
 
 jobs:
   run_trading_bot:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -28,51 +29,50 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pandas lxml html5lib yfinance alpaca-trade-api gspread oauth2client ta tensorflow scikit-learn
-
-      - name: Create Google creds file
-        if: ${{ secrets.SERVICE_ACCOUNT_JSON != '' }}
+          pip install pandas lxml html5lib yfinance
+          
+      - name: 🔑 Create Google credentials file
         run: echo '${{ secrets.SERVICE_ACCOUNT_JSON }}' > google_creds.json
 
-      - name: Determine mode (schedule-aware)
-        id: mode
-        run: |
-          # If workflow_dispatch provided mode -> use it
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "mode=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # For scheduled runs, infer based on current UTC hour:minute
-          now_utc=$(date -u +"%H:%M")
-          hour=$(date -u +"%H")
-          minute=$(date -u +"%M")
-          # Morning scheduled at 12:30 UTC -> run 'morning' if within window
-          if [ "$hour" -eq 12 ] && [ "$minute" -ge 25 ] && [ "$minute" -le 35 ]; then
-            echo "mode=morning" >> $GITHUB_OUTPUT
-          # After-market scheduled at 21:00 UTC
-          elif [ "$hour" -eq 21 ] && [ "$minute" -ge 0 ] && [ "$minute" -le 10 ]; then
-            echo "mode=analysis" >> $GITHUB_OUTPUT
-          else
-            # default to live for the 10-min cron windows
-            echo "mode=live" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Run chosen mode
+      - name: Run morning scan
+        if: github.event_name == 'schedule' && github.event.schedule == '30 12 * * 1-5'
         env:
           ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
           ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
-          ALPACA_BASE_URL: ${{ secrets.ALPACA_BASE_URL }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
-          SERVICE_ACCOUNT_JSON: ${{ secrets.SERVICE_ACCOUNT_JSON }}
-          # Optional email envs
-          EMAIL_SMTP: ${{ secrets.EMAIL_SMTP }}
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
         run: |
-          echo "Running mode: ${{ steps.mode.outputs.mode }}"
-          python moving_average_bot.py ${{ steps.mode.outputs.mode }}
+          python moving_average_bot.py morning
+
+      - name: Run previous-day analysis
+        if: github.event_name == 'schedule' && github.event.schedule == '0 21 * * 1-5'
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python moving_average_bot.py analysis
+
+      - name: Run live trading loop
+        if: github.event_name == 'schedule' && startsWith(github.event.schedule, '*/10')
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY}}
+          
+        run: |
+          python moving_average_bot.py live
+
+      - name: Run default analysis (manual or workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+         
+        run: |
+          python moving_average_bot.py analysis
