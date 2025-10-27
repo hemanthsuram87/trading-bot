@@ -9,13 +9,17 @@ from datetime import datetime, timedelta
 from ta.momentum import RSIIndicator
 from ta.trend import MACD, SMAIndicator, ADXIndicator
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.models import Sequential,load_model
 from tensorflow.keras.layers import LSTM, Dense
 from tensorflow.keras.callbacks import EarlyStopping
+import tensorflow as tf
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import ta
 from ta.volatility import AverageTrueRange
+import yfinance as yf
 
 # ================= CONFIG =================
 ALPACA_KEY = os.getenv("ALPACA_KEY")
@@ -101,7 +105,7 @@ tickers_ws = sheet.worksheet("Tickers")
 tickers = tickers_ws.col_values(1)
 
 # ================= INDICATOR ANALYSIS =================
-def analyze_ticker(ticker, bars):
+def analyze_ticker_backup(ticker, bars):
     if bars.index.tz is None:
         bars.index = bars.index.tz_localize("UTC").tz_convert("America/New_York")
     else:
@@ -128,6 +132,9 @@ def analyze_ticker(ticker, bars):
     except Exception:
         higher_trend = "unknown"
 
+    # ==================== Accumulate messages ====================
+    signals_messages = []
+
     for i in range(1, len(bars)):
         prev, curr = bars.iloc[i - 1], bars.iloc[i]
         atr_value = curr["ATR"]
@@ -135,7 +142,7 @@ def analyze_ticker(ticker, bars):
         volatility_pct = (atr_value / curr["close"]) * 100
         volume_spike = curr["volume"] > 1.5 * curr["AvgVol"]
 
-        # ================= CONDITIONS =================
+        # Conditions
         rsi_cond_buy = curr["RSI"] > 55
         rsi_cond_sell = curr["RSI"] < 45
         adx_cond = curr["ADX"] > 25
@@ -165,8 +172,7 @@ def analyze_ticker(ticker, bars):
                 msg = (f"🟢 {ticker} BUY at {curr['close']:.2f} on {curr['TradeTime']}\n"
                        f"Reason: SMA20 crossed above SMA50 (Bullish trend)\n"
                        f"ATR={atr_value:.2f}, StopDist={stop_distance:.2f}\n{reason}")
-                log_message(msg)
-                send_message(msg)
+                signals_messages.append(msg)
                 sent_signals.add(signal_id)
                 save_sent_signal(signal_id)
 
@@ -189,10 +195,135 @@ def analyze_ticker(ticker, bars):
                 msg = (f"🔴 {ticker} SELL at {curr['close']:.2f} on {curr['TradeTime']}\n"
                        f"Reason: SMA20 crossed below SMA50 (Bearish trend)\n"
                        f"ATR={atr_value:.2f}, StopDist={stop_distance:.2f}\n{reason}")
-                log_message(msg)
-                send_message(msg)
+                signals_messages.append(msg)
                 sent_signals.add(signal_id)
                 save_sent_signal(signal_id)
+
+    # ==================== Send consolidated Telegram message ====================
+    if signals_messages:
+        consolidated_msg = "📈 *Trade Signals Summary*\n\n" + "\n\n".join(signals_messages)
+        send_message(consolidated_msg)
+        log_message("📩 Sent consolidated trade signals for " + ticker)
+
+
+
+def analyze_ticker(ticker, bars):
+    if bars.empty:
+        log_message(f"⚠️ No data for {ticker}, skipping.")
+        return
+
+    # ======== Handle timezone ========
+    if bars.index.tz is None:
+        bars.index = bars.index.tz_localize("UTC").tz_convert("America/New_York")
+    else:
+        bars.index = bars.index.tz_convert("America/New_York")
+
+    # ======== Calculate indicators ========
+    bars["SMA20"] = bars["close"].rolling(SMA_SHORT).mean()
+    bars["SMA50"] = bars["close"].rolling(SMA_LONG).mean()
+    bars["RSI"] = compute_rsi(bars["close"], 14)
+    bars["ATR"] = compute_atr(bars[["high", "low", "close"]], ATR_PERIOD)
+    adx_indicator = ADXIndicator(high=bars["high"], low=bars["low"], close=bars["close"], window=14)
+    bars["ADX"] = adx_indicator.adx()
+    bars["MACD"], bars["MACD_Signal"] = compute_macd(bars["close"])
+    bars["AvgVol"] = bars["volume"].rolling(20).mean()
+
+    bars = bars.reset_index()
+    bars["TradeTime"] = bars["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    # ======== Higher timeframe confirmation ========
+    try:
+        higher_bars = api.get_bars(ticker, tradeapi.TimeFrame.Hour, limit=100, feed="iex").df
+        higher_bars["SMA20"] = higher_bars["close"].rolling(20).mean()
+        higher_bars["SMA50"] = higher_bars["close"].rolling(50).mean()
+        higher_trend = "bullish" if higher_bars["SMA20"].iloc[-1] > higher_bars["SMA50"].iloc[-1] else "bearish"
+    except Exception:
+        higher_trend = "unknown"
+
+    # ======== Accumulate signals ========
+    signals_messages = []
+
+    for i in range(1, len(bars)):
+        prev, curr = bars.iloc[i - 1], bars.iloc[i]
+
+        # Skip rows where SMA is NaN
+        if np.isnan(prev["SMA20"]) or np.isnan(prev["SMA50"]) or np.isnan(curr["SMA20"]) or np.isnan(curr["SMA50"]):
+            continue
+
+        # Debug log for crossovers
+        if prev["SMA20"] < prev["SMA50"] and curr["SMA20"] > curr["SMA50"]:
+            log_message(f"DEBUG {ticker}: Potential BUY crossover at {curr['TradeTime']} SMA20={curr['SMA20']:.2f} SMA50={curr['SMA50']:.2f}")
+        elif prev["SMA20"] > prev["SMA50"] and curr["SMA20"] < curr["SMA50"]:
+            log_message(f"DEBUG {ticker}: Potential SELL crossover at {curr['TradeTime']} SMA20={curr['SMA20']:.2f} SMA50={curr['SMA50']:.2f}")
+
+        # ======== Indicators for signal reason ========
+        atr_value = curr["ATR"]
+        stop_distance = atr_value * ATR_MULTIPLIER
+        volatility_pct = (atr_value / curr["close"]) * 100
+        volume_spike = curr["volume"] > 1.5 * curr["AvgVol"]
+
+        rsi_cond_buy = curr["RSI"] > 55
+        rsi_cond_sell = curr["RSI"] < 45
+        adx_cond = curr["ADX"] > 25
+        macd_bull = curr["MACD"] > curr["MACD_Signal"]
+        macd_bear = curr["MACD"] < curr["MACD_Signal"]
+        vol_cond = 0.5 < volatility_pct < 3
+        volume_cond = volume_spike
+        higher_cond_buy = higher_trend == "bullish"
+        higher_cond_sell = higher_trend == "bearish"
+
+        # ======== BUY signal ========
+        if prev["SMA20"] < prev["SMA50"] and curr["SMA20"] > curr["SMA50"]:
+            signal_id = f"{ticker}-BUY-{curr['TradeTime']}"
+            if signal_id not in sent_signals:
+                conditions = {
+                    "RSI > 55": rsi_cond_buy,
+                    "ADX > 25": adx_cond,
+                    "MACD bullish": macd_bull,
+                    "ATR in range": vol_cond,
+                    "Volume spike": volume_cond,
+                    "Higher TF bullish": higher_cond_buy,
+                }
+                passed = [f"✅ {k}" for k, v in conditions.items() if v]
+                failed = [f"❌ {k}" for k, v in conditions.items() if not v]
+
+                reason = "\n".join(passed + failed)
+                msg = (f"🟢 {ticker} BUY at {curr['close']:.2f} on {curr['TradeTime']}\n"
+                       f"Reason: SMA20 crossed above SMA50 (Bullish trend)\n"
+                       f"ATR={atr_value:.2f}, StopDist={stop_distance:.2f}\n{reason}")
+                signals_messages.append(msg)
+                sent_signals.add(signal_id)
+                save_sent_signal(signal_id)
+
+        # ======== SELL signal ========
+        elif prev["SMA20"] > prev["SMA50"] and curr["SMA20"] < curr["SMA50"]:
+            signal_id = f"{ticker}-SELL-{curr['TradeTime']}"
+            if signal_id not in sent_signals:
+                conditions = {
+                    "RSI < 45": rsi_cond_sell,
+                    "ADX > 25": adx_cond,
+                    "MACD bearish": macd_bear,
+                    "ATR in range": vol_cond,
+                    "Volume spike": volume_cond,
+                    "Higher TF bearish": higher_cond_sell,
+                }
+                passed = [f"✅ {k}" for k, v in conditions.items() if v]
+                failed = [f"❌ {k}" for k, v in conditions.items() if not v]
+
+                reason = "\n".join(passed + failed)
+                msg = (f"🔴 {ticker} SELL at {curr['close']:.2f} on {curr['TradeTime']}\n"
+                       f"Reason: SMA20 crossed below SMA50 (Bearish trend)\n"
+                       f"ATR={atr_value:.2f}, StopDist={stop_distance:.2f}\n{reason}")
+                signals_messages.append(msg)
+                sent_signals.add(signal_id)
+                save_sent_signal(signal_id)
+
+    # ======== Send consolidated Telegram message ========
+    if signals_messages:
+        consolidated_msg = "📈 *Trade Signals Summary*\n\n" + "\n\n".join(signals_messages)
+        send_message(consolidated_msg)
+        log_message(f"📩 Sent consolidated trade signals for {ticker}")
+
 
 # ================= SAVE TO SHEET =================
 def save_to_sheet(ticker, signal, reason, latest):
@@ -214,11 +345,23 @@ def save_to_sheet(ticker, signal, reason, latest):
     ])
 
 # ================= DEEP LEARNING FORECAST =================
-def deep_learning_forecast(ticker, bars, lookback=60, forecast_steps=10):
-    msgs = []
+# Optional: deterministic results
+tf.random.set_seed(42)
+np.random.seed(42)
+
+def deep_learning_forecast(ticker, bars, sheet, lookback=60, forecast_steps=1, retrain=False):
+    """
+    Production-ready AI forecast with LSTM.
+    - Auto-handles Keras deserialization issues by retraining when needed.
+    - Saves and reloads per-ticker model.
+    - Updates Google Sheets + Telegram automatically.
+    - Uses log_message(msg) for all warnings/errors/info.
+    """
     try:
-        df = bars[["close"]].dropna()
-        if len(df) < lookback:
+        # ==================== Data Prep ====================
+        df = bars[["close"]].dropna().reset_index(drop=True)
+        if len(df) < lookback + forecast_steps:
+            log_message(f"⚠️ Not enough data for {ticker}")
             return None
 
         scaler = MinMaxScaler()
@@ -230,49 +373,94 @@ def deep_learning_forecast(ticker, bars, lookback=60, forecast_steps=10):
             y.append(scaled[i + forecast_steps][0])
         X, y = np.array(X), np.array(y)
 
-        model = Sequential([
-            LSTM(64, return_sequences=True, input_shape=(lookback, 1)),
-            LSTM(32),
-            Dense(1)
-        ])
-        model.compile(optimizer="adam", loss="mse")
-        model.fit(X, y, epochs=15, batch_size=32, verbose=0,
-                  callbacks=[EarlyStopping(monitor="loss", patience=3, restore_best_weights=True)])
+        # ==================== Train/Val Split ====================
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
 
+        # ==================== Model Handling ====================
+        model_dir = "models"
+        os.makedirs(model_dir, exist_ok=True)
+        model_path = os.path.join(model_dir, f"{ticker}_lstm.h5")
+
+        model = None
+        if os.path.exists(model_path) and not retrain:
+            try:
+                model = load_model(model_path, compile=False)
+                model.compile(optimizer="adam", loss="mse")
+                log_message(f"✅ Loaded model for {ticker}")
+            except Exception as e:
+                log_message(f"⚠️ Model load failed for {ticker}: {e}. Retraining...")
+                retrain = True
+
+        if model is None or retrain:
+            model = Sequential([
+                LSTM(64, return_sequences=True, input_shape=(lookback, 1)),
+                LSTM(32),
+                Dense(1)
+            ])
+            model.compile(optimizer="adam", loss="mse")
+            es = EarlyStopping(monitor="val_loss", patience=3, restore_best_weights=True)
+            model.fit(
+                X_train, y_train,
+                validation_data=(X_val, y_val),
+                epochs=20, batch_size=32, verbose=0, callbacks=[es]
+            )
+            model.save(model_path)
+            log_message(f"💾 Model retrained and saved for {ticker}")
+
+        # ==================== Forecast ====================
         last_seq = scaled[-lookback:].reshape((1, lookback, 1))
         forecast_scaled = model.predict(last_seq)[0][0]
         forecast_price = scaler.inverse_transform([[forecast_scaled]])[0][0]
-
         current = df["close"].iloc[-1]
+
+        # ==================== Confidence (based on val RMSE) ====================
+        y_pred_val = model.predict(X_val)
+        rmse = np.sqrt(mean_squared_error(y_val, y_pred_val))
+        avg_val_price = scaler.inverse_transform([[np.mean(y_val)]])[0][0]
+        confidence = max(0, 100 - (rmse / avg_val_price * 100))
+
+        # ==================== Trend ====================
         trend = "BULLISH" if forecast_price > current else "BEARISH"
-        confidence = round(abs(forecast_price - current) / current * 100, 2)
 
-        log_message(f"🤖 {ticker} LSTM Forecast: {trend} | Predicted: {forecast_price:.2f} | Conf: {confidence}%")
-
-        ws = None
-        try:
-            ws = sheet.worksheet("AI_Forecast")
-        except Exception:
-            ws = sheet.add_worksheet(title="AI_Forecast", rows="1000", cols="10")
-
-        ws.append_row([
-            datetime.now(EST).strftime("%Y-%m-%d %H:%M:%S"),
-            ticker, current, round(forecast_price, 2), trend, confidence
-        ])
-        # ================= Send forecast to Telegram =================
-        msg = (
+        # ==================== Message ====================
+        msg_text = (
             f"🤖 *AI Forecast - {ticker}*\n"
-            f"Current Price: {current:.2f}\n"
-            f"Predicted Price: {forecast_price:.2f}\n"
+            f"Current: {current:.2f}\n"
+            f"Predicted: {forecast_price:.2f}\n"
             f"Trend: {trend}\n"
-            f"Confidence: {confidence}%"
+            f"Confidence: {confidence:.2f}%"
         )
-        return {"trend": trend, "confidence": confidence, "current": current, "forecast": forecast_price}
+        log_message(msg_text)
+
+        # ==================== Google Sheets ====================
+        try:
+            try:
+                ws = sheet.worksheet("AI_Forecast")
+            except Exception:
+                ws = sheet.add_worksheet(title="AI_Forecast", rows="1000", cols="10")
+
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            ws.append_row([
+                now_str, ticker, round(current, 2),
+                round(forecast_price, 2), trend, round(confidence, 2)
+            ])
+            log_message(f"📊 Logged in Google Sheets for {ticker}")
+        except Exception as e:
+            log_message(f"⚠️ Google Sheet update failed for {ticker}: {e}")
+
+
+        # ==================== Output ====================
+        return {
+            "ticker": ticker,
+            "trend": trend,
+            "confidence": round(confidence, 2),
+            "current": round(current, 2),
+            "forecast": round(forecast_price, 2)
+        }
 
     except Exception as e:
         log_message(f"⚠️ AI forecast failed for {ticker}: {e}")
         return None
- 
 
 # ================= PREVIOUS DAY ANALYSIS =================
 def previous_day_analysis():
@@ -289,43 +477,111 @@ def previous_day_analysis():
                                 start=start_date, end=end_date, adjustment="raw", feed="iex").df
             if not bars.empty:
                 analyze_ticker(ticker, bars)
-                forecast = deep_learning_forecast(ticker, bars)
-                send_ai_message(forecast)
+                result = deep_learning_forecast(ticker, bars, sheet)
+                if result:
+                    ai_forecasts.append(result)
             else:
                 log_message(f"No bars found for {ticker}")
         except Exception as e:
             log_message(f"Error fetching bars for {ticker}: {e}")
-
+      # Send AI forecast to Telegram
+    if ai_forecasts:
+        msg = "🤖 *AI Forecasts Summary — Current Day / Previous Day Analysis*\n\n"
+        for f in ai_forecasts:
+            # Determine reason based on predicted vs current price
+            reason = "Predicted price > current price" if f['trend'] == "BULLISH" else "Predicted price < current price"
+            
+            msg += (
+                f"{f['ticker']}: Current {f['current']:.2f} | "
+                f"Predicted {f['forecast']:.2f} | "
+                f"Trend {f['trend']} ({reason}) | "
+                f"Conf {f['confidence']}%\n"
+            )
+        
+        send_message(msg)
     log_message("📌 Full-day analysis completed.")
 
 # ================= LIVE TRADING LOOP =================
 def live_trading_loop():
     log_message("🚀 Starting live trading loop (runs every 10 mins)")
-    
     now = datetime.now(EST)
-    if now.weekday() >= 5:  # Skip weekends
-        log_message("🕒 Weekend — sleeping 6 hours.")
-      
+    log_message(f"📈 Running live analysis at {now.strftime('%b %d %H:%M')}")
 
-    if now.hour < 9 or (now.hour == 9 and now.minute < 30) or now.hour >= 16:
-        log_message("⏸️ Market closed — waiting...")
-        
-
-    log_message(f"📈 Running live analysis at {now.strftime('%H:%M')}")
+    summary_messages = []
+    if datetime.now(EST).weekday() >= 5:  # 5=Sat, 6=Sun
+        log_message("ℹ️ Weekend detected. Skipping live trading loop.")
+        return
+    
     for ticker in tickers:
         try:
             end = datetime.now(EST)
             start = end - timedelta(hours=6)
-            bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute,
-                                start=start.isoformat(), end=end.isoformat(), feed="iex").df
-            if not bars.empty:
-                analyze_ticker(ticker, bars)
-                forecast = deep_learning_forecast(ticker, bars)
-                send_ai_message(forecast)
+            bars = api.get_bars(
+                ticker,
+                tradeapi.TimeFrame.Minute,
+                start=start.isoformat(),
+                end=end.isoformat(),
+                feed="iex"
+            ).df
+
+            if bars.empty:
+                log_message(f"⚠️ No market data for {ticker}, skipping.")
+                continue
+
+            # --- Calculate latest indicators for message ---
+            latest = bars.iloc[-1]
+            sma20 = latest["close"].rolling(SMA_SHORT).mean() if "SMA20" not in bars else latest["SMA20"]
+            sma50 = latest["close"].rolling(SMA_LONG).mean() if "SMA50" not in bars else latest["SMA50"]
+            rsi = compute_rsi(bars["close"], 14).iloc[-1]
+            atr = compute_atr(bars[["high","low","close"]], ATR_PERIOD).iloc[-1]
+            macd, macd_signal = compute_macd(bars["close"])
+            macd_latest = macd.iloc[-1]
+            macd_signal_latest = macd_signal.iloc[-1]
+            adx_indicator = ADXIndicator(bars["high"], bars["low"], bars["close"], window=14)
+            adx = adx_indicator.adx().iloc[-1]
+
+            # --- Technical summary string ---
+            technical_summary = (
+                f"• Indicators: Close ${latest['close']:.2f} | "
+                f"SMA20 {sma20:.2f} / SMA50 {sma50:.2f} | "
+                f"RSI {rsi:.1f} | ATR {atr:.2f} | "
+                f"MACD {macd_latest:.2f}/{macd_signal_latest:.2f} | ADX {adx:.1f}"
+            )
+
+            # --- AI Deep Learning Forecast ---
+            forecast_result = deep_learning_forecast(ticker, bars, sheet)
+            if forecast_result:
+                trend = forecast_result["trend"]
+                reason = (
+                    "Predicted ↑ (Bullish)" if trend == "BULLISH" else "Predicted ↓ (Bearish)"
+                )
+                forecast_summary = (
+                    f"• AI Forecast: Current ${forecast_result['current']:.2f} → "
+                    f"Forecast ${forecast_result['forecast']:.2f} | "
+                    f"Trend {trend} | Conf {forecast_result['confidence']}% | {reason}"
+                )
+            else:
+                forecast_summary = "• AI Forecast: N/A"
+
+            # --- Combine into one message per ticker ---
+            ticker_msg = f"📊 *{ticker}*\n{technical_summary}\n{forecast_summary}"
+            summary_messages.append(ticker_msg)
+
         except Exception as e:
-            log_message(f"Live loop error for {ticker}: {e}")
+            log_message(f"❌ Error processing {ticker}: {e}")
+            continue
+
+    # --- Send consolidated Telegram summary ---
+    if summary_messages:
+        msg = f"📈 *AI + Technical Morning Scan — {now.strftime('%b %d %H:%M')}*\n\n"
+        msg += "\n\n".join(summary_messages)
+        send_message(msg)
+        log_message("📩 Sent consolidated AI + Technical summary to Telegram.")
+    else:
+        log_message("ℹ️ No data or signals available this cycle.")
 
     log_message("⏳ Sleeping 10 minutes...")
+
         
 
 # ================= MORNING SCAN =================
@@ -360,15 +616,9 @@ def morning_scan():
 
             # AI Forecast
             if len(bars) >= 60:
-                forecast = deep_learning_forecast(ticker, bars)
-                if forecast:
-                    ai_forecasts.append({
-                        "Ticker": ticker,
-                        "Current": bars["close"].iloc[-1],
-                        "Forecast": forecast["forecast"],
-                        "Trend": forecast["trend"],
-                        "Confidence": forecast["confidence"]
-                    })
+                result = deep_learning_forecast(ticker, bars, sheet)
+                if result:
+                    ai_forecasts.append(result)
 
             # Compute indicators
             bars["SMA20"] = bars["close"].rolling(20).mean()
@@ -418,7 +668,16 @@ def morning_scan():
     if ai_forecasts:
         msg = "🤖 *AI Forecasts Summary — Morning Scan*\n\n"
         for f in ai_forecasts:
-            msg += f"{f['Ticker']}: Current {f['Current']:.2f} | Predicted {f['Forecast']:.2f} | Trend {f['Trend']} | Conf {f['Confidence']}%\n"
+            # Determine reason based on predicted vs current price
+            reason = "Predicted price > current price" if f['trend'] == "BULLISH" else "Predicted price < current price"
+            
+            msg += (
+                f"{f['ticker']}: Current {f['current']:.2f} | "
+                f"Predicted {f['forecast']:.2f} | "
+                f"Trend {f['trend']} ({reason}) | "
+                f"Conf {f['confidence']}%\n"
+            )
+        
         send_message(msg)
 
     # No technical signals
@@ -449,21 +708,23 @@ def morning_scan():
 
 def fetch_top_movers():
     """Fetch top gainers and losers from FMP API."""
-    api_key = "YOUR_FMP_API_KEY"  # replace with your key
-    base_url = "https://financialmodelingprep.com/api/v3/stock_market"
-    top_movers = {"gainers": [], "losers": []}
+    base_url = "https://financialmodelingprep.com/stable"
+    top_movers = {}
 
-    for category in top_movers.keys():
-        url = f"{base_url}/{category}?apikey={api_key}"
-        try:
-            resp = requests.get(url)
-            if resp.status_code == 200:
-                top_movers[category] = resp.json()  # list of dicts
-            else:
-                print(f"Failed to fetch {category}: {resp.status_code}")
-        except Exception as e:
-            print(f"Error fetching {category}: {e}")
-    return top_movers["gainers"], top_movers["losers"]
+    try:
+        gainers = requests.get(f"{base_url}/biggest-gainers?apikey={api_key}", timeout=10)
+        losers = requests.get(f"{base_url}/biggest-losers?apikey={api_key}", timeout=10)
+        gainers.raise_for_status()
+        losers.raise_for_status()
+
+        top_movers["gainers"] = gainers.json()
+        top_movers["losers"] = losers.json()
+
+        return top_movers["gainers"], top_movers["losers"]
+
+    except requests.exceptions.RequestException as e:
+        log_message(f"Error fetching top movers: {e}")
+        return [], []
 
 def send_top_movers_to_telegram(top_n=15):
     gainers, losers = fetch_top_movers()
@@ -482,6 +743,7 @@ def send_top_movers_to_telegram(top_n=15):
     send_message(msg)
     print("✅ Top movers sent to Telegram.")
 
+
 # ================= ENTRY POINT =================
 if __name__ == "__main__":
     import sys
@@ -492,7 +754,10 @@ if __name__ == "__main__":
     elif mode == "live":
         live_trading_loop()
     elif mode == "morning":
-        morning_scan()
         send_top_movers_to_telegram(top_n=15)
+        morning_scan()
+       
     else:
         log_message(f"Unknown mode: {mode}")
+
+
