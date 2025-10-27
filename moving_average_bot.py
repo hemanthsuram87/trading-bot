@@ -515,7 +515,7 @@ def deep_learning_forecast(ticker, bars, sheet, lookback=60, forecast_steps=1, r
         return None
 
 # ================= PREVIOUS DAY ANALYSIS =================
-ef previous_day_analysis():
+def previous_day_analysis():
     now = datetime.now(EST)
     today = now.date()
     weekday = today.weekday()  # Monday=0, Sunday=6
