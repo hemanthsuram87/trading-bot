@@ -66,7 +66,11 @@ sent_signals = load_sent_signals()
 def send_message(msg):
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+        r = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+        if r.status_code != 200:
+            log_message(f"❌ Telegram send failed: {r.status_code}, {r.text}")
+        else:
+            log_message("✅ Telegram message sent successfully")
 
 def log_message(msg):
     timestamp = datetime.now(EST).strftime("[%Y-%m-%d %H:%M:%S]")
