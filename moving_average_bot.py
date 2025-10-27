@@ -17,6 +17,12 @@ from sklearn.metrics import mean_squared_error
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import logging
+# TA libs (some functions use ta)
+import ta
+from ta.trend import ADXIndicator
+
+# Alpaca
+import alpaca_trade_api as tradeapi
 
 # ================= CONFIG =================
 ALPACA_KEY = os.getenv("ALPACA_KEY")
