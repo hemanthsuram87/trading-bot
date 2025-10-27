@@ -96,7 +96,7 @@ def compute_macd(close):
 
 # ================= GOOGLE SHEETS SETUP =================
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
 client = gspread.authorize(creds)
 sheet = client.open("Daily_stocks")
 tickers_ws = sheet.worksheet("Tickers")
