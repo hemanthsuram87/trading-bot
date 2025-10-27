@@ -36,20 +36,45 @@ jobs:
 
       - name: Run morning scan
         if: github.event_name == 'schedule' && github.event.schedule == '30 12 * * 1-5'
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_CREDS_FILE: "google_creds.json"
         run: |
           python moving_average_bot.py morning
 
       - name: Run previous-day analysis
         if: github.event_name == 'schedule' && github.event.schedule == '0 21 * * 1-5'
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_CREDS_FILE: "google_creds.json"
         run: |
           python moving_average_bot.py analysis
 
       - name: Run live trading loop
         if: github.event_name == 'schedule' && startsWith(github.event.schedule, '*/10')
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY}}
+          GOOGLE_CREDS_FILE: "google_creds.json"
         run: |
           python moving_average_bot.py live
 
       - name: Run default analysis (manual or workflow_dispatch)
         if: github.event_name == 'workflow_dispatch'
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_CREDS_FILE: "google_creds.json"
         run: |
           python moving_average_bot.py analysis
