@@ -22,8 +22,8 @@ from ta.volatility import AverageTrueRange
 import yfinance as yf
 
 # ================= CONFIG =================
-ALPACA_KEY = os.getenv("ALPACA_KEY")
-ALPACA_SECRET = os.getenv("ALPACA_SECRET")
+ALPACA_KEY = os.getenv("APCA_API_KEY_ID")
+ALPACA_SECRET = os.getenv("APCA_API_SECRET_KEY")
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 # Telegram config
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
