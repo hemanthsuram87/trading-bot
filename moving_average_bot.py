@@ -59,19 +59,36 @@ def load_sent_signals():
 
 def save_sent_signal(signal_id):
     file_path = get_signal_file()
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
     with open(file_path, "a") as f:
         f.write(signal_id + "\n")
+
 
 sent_signals = load_sent_signals()
 
 def send_message(msg):
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        r = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
-        if r.status_code != 200:
-            log_message(f"❌ Telegram send failed: {r.status_code}, {r.text}")
-        else:
-            log_message("✅ Telegram message sent successfully")
+    if not (TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
+        log_message("⚠️ Telegram token or chat ID not set.")
+        return
+
+    MAX_LEN = 4000  # slightly below Telegram's 4096 limit
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
+    # Split message into chunks
+    chunks = [msg[i:i + MAX_LEN] for i in range(0, len(msg), MAX_LEN)]
+
+    for idx, chunk in enumerate(chunks, 1):
+        data = {"chat_id": TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": "Markdown"}
+        try:
+            r = requests.post(url, data=data, timeout=10)
+            if r.status_code != 200:
+                log_message(f"❌ Telegram send failed (chunk {idx}/{len(chunks)}): {r.status_code}, {r.text}")
+            else:
+                log_message(f"✅ Telegram message sent successfully (chunk {idx}/{len(chunks)})")
+        except Exception as e:
+            log_message(f"❌ Telegram send exception (chunk {idx}/{len(chunks)}): {e}")
+
 
 def log_message(msg):
     timestamp = datetime.now(EST).strftime("[%Y-%m-%d %H:%M:%S]")
