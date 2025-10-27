@@ -46,26 +46,57 @@ SIGNAL_DIR = "signals"
 # ================= INIT =================
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(SIGNAL_DIR, exist_ok=True)
+SIGNAL_FILE = os.path.join(SIGNAL_DIR, "sent_signals_master.txt")  # Single file for all signals
+SIGNAL_EXPIRY_DAYS = 5
+def parse_signal_date(signal_id):
+    """
+    Extract datetime from a signal_id formatted like:
+    'AAPL-BUY-2025-10-27 13:45:00'
+    """
+    try:
+        # Timestamp is always the last part
+        timestamp_str = signal_id.split("-", 2)[-1]
+        return datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
 
-def get_signal_file():
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    return os.path.join(SIGNAL_DIR, f"sent_signals_{today_str}.txt")
+def cleanup_old_signals(signals):
+    """Remove signals older than SIGNAL_EXPIRY_DAYS."""
+    now = datetime.now()
+    valid_signals = set()
+    for sig in signals:
+        sig_date = parse_signal_date(sig)
+        if not sig_date or now - sig_date <= timedelta(days=SIGNAL_EXPIRY_DAYS):
+            valid_signals.add(sig)
+    return valid_signals
 
 def load_sent_signals():
-    file_path = get_signal_file()
-    if os.path.exists(file_path):
-        with open(file_path, "r") as f:
-            return set(line.strip() for line in f if line.strip())
-    return set()
+    """Load signals from persistent file and clean up expired ones."""
+    if not os.path.exists(SIGNAL_FILE):
+        return set()
+
+    with open(SIGNAL_FILE, "r") as f:
+        signals = set(line.strip() for line in f if line.strip())
+
+    # Remove old signals
+    cleaned = cleanup_old_signals(signals)
+    if cleaned != signals:
+        save_all_signals(cleaned)  # rewrite file if cleanup occurred
+    return cleaned
 
 def save_sent_signal(signal_id):
-    file_path = get_signal_file()
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, "a") as f:
+    """Append new signal to file."""
+    os.makedirs(os.path.dirname(SIGNAL_FILE), exist_ok=True)
+    with open(SIGNAL_FILE, "a") as f:
         f.write(signal_id + "\n")
 
-
+def save_all_signals(signals):
+    """Overwrite full file (used during cleanup)."""
+    os.makedirs(os.path.dirname(SIGNAL_FILE), exist_ok=True)
+    with open(SIGNAL_FILE, "w") as f:
+        for sig in sorted(signals):
+            f.write(sig + "\n")
+            
 sent_signals = load_sent_signals()
 
 def send_message(msg):
@@ -487,40 +518,65 @@ def deep_learning_forecast(ticker, bars, sheet, lookback=60, forecast_steps=1, r
 def previous_day_analysis():
     now = datetime.now(EST)
     today = now.date()
-    start_date = (today - timedelta(days=3)).strftime("%Y-%m-%dT09:30:00-04:00")
+    weekday = today.weekday()  # Monday=0, Sunday=6
+
+    # --- Determine correct date range ---
+    if weekday >= 5:  # Saturday (5) or Sunday (6)
+        # Go back to last Friday
+        last_trading_day = today - timedelta(days=weekday - 4)
+        analysis_day_label = "Previous Trading Day (Friday)"
+    else:
+        # Regular weekday — analyze today
+        last_trading_day = today
+        analysis_day_label = "Current Trading Day"
+
+    # Market hours
+    start_date = last_trading_day.strftime("%Y-%m-%dT09:30:00-04:00")
     end_date = now.strftime("%Y-%m-%dT%H:%M:%S-04:00")
 
-    log_message(f"📊 Running analysis for latest available trading day...")
+    log_message(f"📊 Running {analysis_day_label} analysis...")
+
     ai_forecasts = []
     for ticker in tickers:
         try:
-            bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute,
-                                start=start_date, end=end_date, adjustment="raw", feed="iex").df
+            bars = api.get_bars(
+                ticker,
+                tradeapi.TimeFrame.Minute,
+                start=start_date,
+                end=end_date,
+                adjustment="raw",
+                feed="iex"
+            ).df
+
             if not bars.empty:
                 analyze_ticker(ticker, bars)
                 result = deep_learning_forecast(ticker, bars, sheet)
                 if result:
                     ai_forecasts.append(result)
             else:
-                log_message(f"No bars found for {ticker}")
+                log_message(f"No bars found for {ticker} ({analysis_day_label})")
+
         except Exception as e:
             log_message(f"Error fetching bars for {ticker}: {e}")
-      # Send AI forecast to Telegram
+
+    # --- Send Telegram Summary ---
     if ai_forecasts:
-        msg = "🤖 *AI Forecasts Summary — Current Day / Previous Day Analysis*\n\n"
+        msg = f"🤖 *AI Forecasts Summary — {analysis_day_label}*\n\n"
         for f in ai_forecasts:
-            # Determine reason based on predicted vs current price
-            reason = "Predicted price > current price" if f['trend'] == "BULLISH" else "Predicted price < current price"
-            
+            reason = (
+                "Predicted price > current price → Possible BUY"
+                if f['trend'] == "BULLISH"
+                else "Predicted price < current price → Possible SELL"
+            )
             msg += (
                 f"{f['ticker']}: Current {f['current']:.2f} | "
                 f"Predicted {f['forecast']:.2f} | "
                 f"Trend {f['trend']} ({reason}) | "
                 f"Conf {f['confidence']}%\n"
             )
-        
         send_message(msg)
-    log_message("📌 Full-day analysis completed.")
+
+    log_message(f"📌 {analysis_day_label} analysis completed.")
 
 # ================= LIVE TRADING LOOP =================
 def live_trading_loop():
