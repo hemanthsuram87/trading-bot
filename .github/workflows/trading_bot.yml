@@ -34,14 +34,14 @@ jobs:
       - name: Run morning scan
         if: github.event.schedule == '30 12 * * 1-5'
         run: |
-          python trading_bot.py morning
+          python moving_average_bot.py morning
 
       - name: Run previous-day analysis
         if: github.event.schedule == '0 21 * * 1-5'
         run: |
-          python trading_bot.py analysis
+          python moving_average_bot.py analysis
 
       - name: Run live trading loop
         if: startsWith(github.event.schedule, '*/10')
         run: |
-          python trading_bot.py live_trading_loop
+          python moving_average_bot.py live
