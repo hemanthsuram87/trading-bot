@@ -158,27 +158,7 @@ def send_message(msg):
         except Exception as e:
             log_message(f"❌ Telegram exception: {e}")
 
-def send_email(subject, body):
-    if not (EMAIL_SMTP and EMAIL_FROM and EMAIL_TO):
-        return
-    try:
-        import smtplib
-        from email.mime.text import MIMEText
-        host, port = EMAIL_SMTP.split(":")
-        port = int(port)
-        msg = MIMEText(body)
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_FROM
-        msg["To"] = EMAIL_TO
-        s = smtplib.SMTP(host, port, timeout=10)
-        s.starttls()
-        if EMAIL_USER and EMAIL_PASS:
-            s.login(EMAIL_USER, EMAIL_PASS)
-        s.sendmail(EMAIL_FROM, [EMAIL_TO], msg.as_string())
-        s.quit()
-        log_message("✅ Email sent")
-    except Exception as e:
-        log_message(f"⚠️ Email send failed: {e}")
+
 
 # ================= INDICATORS =================
 def compute_rsi(series, period=14):
@@ -445,7 +425,7 @@ def manage_positions():
                     log_message(f"⚠️ Auto-closing {symbol} due to unrealized pct {unreal_pct:.2f}% <= {CLOSE_LOSS_PCT}%")
                     api.close_position(symbol)
                     send_message(f"⚠️ Closed {symbol} (auto-close) due to loss threshold {CLOSE_LOSS_PCT}%")
-                    send_email(f"Auto-closed {symbol}", f"Closed {symbol} due to {unreal_pct:.2f}% loss.")
+                   
             except Exception as e:
                 log_message(f"⚠️ manage_positions per-position error: {e}")
     except Exception as e:
