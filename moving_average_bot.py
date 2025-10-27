@@ -26,9 +26,10 @@ ALPACA_KEY = "PK237O7I63OSG4RKO32AQMCQVG"
 ALPACA_SECRET = "EFez3L8WnR3DouNoXRYk2LEsCGpXejCTwd9ebUopxt1e"
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 # Telegram config
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-api_key = os.getenv("FMP_API_KEY")
+TELEGRAM_TOKEN = "8475528816:AAFntgwGkp9jW5mVVnaX1MHGtM4kjPfnvC8"
+TELEGRAM_CHAT_ID = "7862318105"
+GOOGLE_CREDS_FILE = "service_account.json"
+api_key="2iGFEJ1lGax2deRX426NEBiDpCc0dGrO"
 api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, base_url=ALPACA_BASE_URL)
 
 EST = pytz.timezone("US/Eastern")
