@@ -24,6 +24,20 @@ from ta.trend import ADXIndicator
 # Alpaca
 import alpaca_trade_api as tradeapi
 
+
+import matplotlib.pyplot as plt
+
+
+import joblib
+import math
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+from ta.trend import ADXIndicator
+
 # ================= CONFIG =================
 ALPACA_KEY = os.getenv("ALPACA_KEY")
 ALPACA_SECRET = os.getenv("ALPACA_SECRET")
@@ -468,248 +482,554 @@ def previous_day_analysis():
         send_message(s)
 
 # ================= LIVE TRADING LOOP (single-run job) =================
-def live_trading_loop():
-    log_message("🚀 Starting live trading loop v2 (hybrid scoring + risk control)")
+def live_trading_loop(backtest_days=0):
+    """
+    Runs the live trading loop and optionally backtests the last N days.
+    
+    Parameters:
+        backtest_days (int): Number of previous days to simulate for backtesting.
+                             0 = live only.
+    """
     now = datetime.now(EST)
-    log_message(f"📈 Running live analysis at {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    log_message(f"🚀 Starting trading loop at {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
     if now.weekday() >= 5:
-        log_message("ℹ️ Weekend detected — skipping.")
+        log_message("ℹ️ Weekend — skipping live trading.")
         return
 
     summary_messages = []
 
-    # configuration for scoring & risk
-    VOL_MULTIPLIER = 1.5      # volume surge multiplier
-    BREAKOUT_LOOKBACK = 50    # lookback for breakout high/low
-    ROC_PERIOD = 10           # % change period for momentum check
-    MIN_BARS = max(SMA_LONG, 60, BREAKOUT_LOOKBACK, ROC_PERIOD)  # require enough bars
-
     for ticker in tickers:
         try:
-            log_message(f"🔍 Analyzing {ticker}...")
+            # ================= BACKTEST =================
+            if backtest_days > 0:
+                log_message(f"🧪 Running backtest for {ticker} ({backtest_days} days)")
+                df_trades = backtest_ticker(
+                    ticker,
+                    start_date=(now - timedelta(days=backtest_days)).isoformat(),
+                    end_date=now.isoformat()
+                )
+                if df_trades is not None and not df_trades.empty:
+                    total_trades = len(df_trades)
+                    pnl_total = df_trades["pnl"].sum()
+                    win_rate = len(df_trades[df_trades["pnl"] > 0]) / total_trades * 100
+                    summary_messages.append(
+                        f"📊 Backtest {ticker}: Trades={total_trades}, "
+                        f"P&L=${pnl_total:.2f}, Win Rate={win_rate:.1f}%"
+                    )
 
-            end = datetime.now(EST)
+            # ================= LIVE DATA =================
+            log_message(f"🔍 Fetching live data for {ticker}...")
+            end = now
             start = end - timedelta(hours=6)
             bars = api.get_bars(
-                ticker,
-                tradeapi.TimeFrame.Minute,
-                start=start.isoformat(),
-                end=end.isoformat(),
-                feed="iex"
+                ticker, tradeapi.TimeFrame.Minute,
+                start=start.isoformat(), end=end.isoformat(), feed="iex"
             ).df
 
-            if bars.empty or len(bars) < MIN_BARS:
-                log_message(f"⚠️ Not enough market data for {ticker} (have {len(bars)} bars, need {MIN_BARS})")
+            if bars.empty:
+                log_message(f"⚠️ No market data for {ticker}")
                 continue
 
-            bars = safe_tz_localize_and_convert(bars.copy())
+            bars = safe_tz_localize_and_convert(bars)
 
-            # --- Indicators / features
+            # ================= FEATURE ENGINEERING =================
             bars["SMA20"] = bars["close"].rolling(SMA_SHORT).mean()
             bars["SMA50"] = bars["close"].rolling(SMA_LONG).mean()
             bars["RSI"] = compute_rsi(bars["close"], 14)
             bars["ATR"] = compute_atr(bars[["high", "low", "close"]], ATR_PERIOD)
-            bars["Vol_MA20"] = bars["volume"].rolling(20).mean()
             macd, macd_signal = compute_macd(bars["close"])
-            bars["MACD"] = macd
-            bars["MACD_SIGNAL"] = macd_signal
-            bars["ROC"] = bars["close"].pct_change(ROC_PERIOD) * 100
-
-            # ADX (safe)
-            try:
-                adx_indicator = ADXIndicator(bars["high"], bars["low"], bars["close"], window=14)
-                bars["ADX"] = adx_indicator.adx()
-            except Exception:
-                bars["ADX"] = np.nan
+            adx_indicator = ADXIndicator(bars["high"], bars["low"], bars["close"], window=14)
+            adx = adx_indicator.adx().iloc[-1] if len(bars) >= 14 else np.nan
 
             latest = bars.iloc[-1]
+            sma20, sma50 = bars["SMA20"].iloc[-1], bars["SMA50"].iloc[-1]
+            rsi, atr = bars["RSI"].iloc[-1], bars["ATR"].iloc[-1]
+            macd_latest, macd_signal_latest = macd.iloc[-1], macd_signal.iloc[-1]
 
-            # safe extraction (avoid scalar .rolling on single value)
-            sma20 = float(bars["SMA20"].iloc[-1]) if not pd.isna(bars["SMA20"].iloc[-1]) else np.nan
-            sma50 = float(bars["SMA50"].iloc[-1]) if not pd.isna(bars["SMA50"].iloc[-1]) else np.nan
-            rsi = float(bars["RSI"].iloc[-1]) if not pd.isna(bars["RSI"].iloc[-1]) else np.nan
-            atr = float(bars["ATR"].iloc[-1]) if not pd.isna(bars["ATR"].iloc[-1]) else np.nan
-            vol_ma = float(bars["Vol_MA20"].iloc[-1]) if not pd.isna(bars["Vol_MA20"].iloc[-1]) else np.nan
-            volume_surge = (latest["volume"] > VOL_MULTIPLIER * (vol_ma if vol_ma > 0 else 1))
-            macd_latest = float(bars["MACD"].iloc[-1]) if not pd.isna(bars["MACD"].iloc[-1]) else np.nan
-            macd_signal_latest = float(bars["MACD_SIGNAL"].iloc[-1]) if not pd.isna(bars["MACD_SIGNAL"].iloc[-1]) else np.nan
-            roc = float(bars["ROC"].iloc[-1]) if not pd.isna(bars["ROC"].iloc[-1]) else 0.0
-            adx = float(bars["ADX"].iloc[-1]) if not pd.isna(bars["ADX"].iloc[-1]) else np.nan
-
-            # breakout detection (compare to previous high/low over lookback, exclude current bar)
-            if len(bars) >= BREAKOUT_LOOKBACK + 1:
-                lookback_high = bars["high"].rolling(BREAKOUT_LOOKBACK).max().iloc[-2]
-                lookback_low = bars["low"].rolling(BREAKOUT_LOOKBACK).min().iloc[-2]
-                breakout_up = latest["close"] > (lookback_high if not pd.isna(lookback_high) else float("inf"))
-                breakout_down = latest["close"] < (lookback_low if not pd.isna(lookback_low) else float("-inf"))
-            else:
-                breakout_up = breakout_down = False
-
-            # --- AI forecast (weighted) ---
+            # ================= AI FORECAST =================
             forecast_result = deep_learning_forecast(ticker, bars, sheet if 'sheet' in globals() else None)
-            ai_trend = None
-            ai_conf = 0.0
             if forecast_result:
-                ai_trend = forecast_result.get("trend")
-                ai_conf = float(forecast_result.get("confidence", 0.0))
-
-            # --- Composite scoring (weighted) ---
-            score = 0.0
-            reasons = []
-
-            # Feature: SMA alignment
-            if sma20 > sma50:
-                score += 1.0
-                reasons.append("SMA20 > SMA50 (trend up) [+1]")
+                forecast_price = forecast_result["forecast"]
+                current_price = forecast_result["current"]
+                trend = forecast_result["trend"]
+                confidence = forecast_result["confidence"]
             else:
-                reasons.append("SMA20 <= SMA50 (no uptrend) [+0]")
+                forecast_price = current_price = trend = confidence = None
 
-            # Feature: MACD momentum
-            if macd_latest > macd_signal_latest:
-                score += 1.0
-                reasons.append("MACD > Signal (momentum up) [+1]")
-            else:
-                reasons.append("MACD <= Signal (momentum weak) [+0]")
-
-            # Feature: ADX strength
-            if not pd.isna(adx) and adx > 25:
-                score += 0.5
-                reasons.append(f"ADX {adx:.1f} (trend strong) [+0.5]")
-            else:
-                reasons.append(f"ADX {adx if not pd.isna(adx) else 'n/a'} (trend weak) [+0]")
-
-            # Feature: Volume confirmation
-            if volume_surge:
-                score += 0.5
-                reasons.append(f"Volume surge (x{latest['volume'] / (vol_ma if vol_ma>0 else 1):.2f}) [+0.5]")
-            else:
-                reasons.append("No strong volume confirmation [+0]")
-
-            # Feature: ROC momentum
-            if roc > 0.5:
-                score += 0.3
-                reasons.append(f"ROC +{roc:.2f}% (momentum up) [+0.3]")
-            elif roc < -0.5:
-                score -= 0.3
-                reasons.append(f"ROC {roc:.2f}% (momentum down) [-0.3]")
-            else:
-                reasons.append(f"ROC {roc:.2f}% (neutral) [+0]")
-
-            # Feature: Breakout
-            if breakout_up:
-                score += 0.7
-                reasons.append(f"Price broke above {BREAKOUT_LOOKBACK}-bar high (breakout) [+0.7]")
-            if breakout_down:
-                score -= 0.7
-                reasons.append(f"Price broke below {BREAKOUT_LOOKBACK}-bar low (down breakout) [-0.7]")
-
-            # Feature: RSI guard
-            if not pd.isna(rsi):
-                if rsi > 70:
-                    score -= 0.5
-                    reasons.append(f"RSI {rsi:.1f} (overbought) [-0.5]")
-                elif rsi < 30:
-                    score += 0.4
-                    reasons.append(f"RSI {rsi:.1f} (oversold) [+0.4]")
-                else:
-                    reasons.append(f"RSI {rsi:.1f} (neutral) [+0]")
-
-            # Feature: AI weighting (probabilistic)
-            if ai_trend == "BULLISH" or ai_trend == "Up":
-                ai_weight = (ai_conf / 100.0) * 1.0  # up to +1.0
-                score += ai_weight
-                reasons.append(f"AI bullish {ai_conf:.1f}% [+{ai_weight:.2f}]")
-            elif ai_trend == "BEARISH" or ai_trend == "Down":
-                ai_weight = (ai_conf / 100.0) * 1.0
-                score -= ai_weight
-                reasons.append(f"AI bearish {ai_conf:.1f}% [-{ai_weight:.2f}]")
-            else:
-                reasons.append("AI neutral or unavailable [+0]")
-
-            # Normalize / clamp score for readability
-            score = float(score)
-            reasons.append(f"Composite score = {score:.2f}")
-
-            # --- Decision thresholds (tunable) ---
-            # These thresholds are conservative by default
-            BUY_THRESHOLD = 2.0
-            STRONG_BUY_THRESHOLD = 3.0
-            SELL_THRESHOLD = -1.5
-
+            # ================= SIGNAL GENERATION =================
+            signal_reason = []
             action = "HOLD"
-            if score >= STRONG_BUY_THRESHOLD:
-                action = "STRONG BUY"
-            elif score >= BUY_THRESHOLD:
+
+            if sma20 > sma50 and macd_latest > macd_signal_latest and rsi < 70 and adx > 20:
                 action = "BUY"
-            elif score <= SELL_THRESHOLD:
+                signal_reason.extend([
+                    "✅ SMA20 above SMA50 → bullish trend",
+                    "✅ MACD bullish crossover",
+                    f"✅ RSI healthy at {rsi:.1f}",
+                    f"✅ ADX {adx:.1f} indicates strong trend"
+                ])
+                if trend == "Up" and confidence >= 60:
+                    signal_reason.append(f"🤖 AI confirms upward momentum ({confidence}% confidence)")
+
+            elif sma20 < sma50 and macd_latest < macd_signal_latest and rsi > 30 and adx > 20:
                 action = "SELL"
+                signal_reason.extend([
+                    "❌ SMA20 below SMA50 → bearish trend",
+                    "❌ MACD bearish crossover",
+                    f"❌ RSI weakening at {rsi:.1f}",
+                    f"❌ ADX {adx:.1f} indicates strong downtrend"
+                ])
+                if trend == "Down" and confidence >= 60:
+                    signal_reason.append(f"🤖 AI confirms downward momentum ({confidence}% confidence)")
             else:
                 action = "HOLD"
+                signal_reason.append("⚖️ Mixed or neutral signals — waiting for confirmation.")
 
-            # --- ATR-based SL/TP (risk management) ---
-            if not pd.isna(atr) and atr > 0:
-                sl = latest["close"] - 1.5 * atr if action in ("BUY", "STRONG BUY") else latest["close"] + 1.5 * atr
-                tp = latest["close"] + 3.0 * atr if action in ("BUY", "STRONG BUY") else latest["close"] - 3.0 * atr
-                rr = (tp - latest["close"]) / (latest["close"] - sl) if (latest["close"] - sl) != 0 else float("inf")
-                reasons.append(f"SL ${sl:.2f} | TP ${tp:.2f} | R:R {rr:.2f}")
-            else:
-                sl = tp = rr = None
-                reasons.append("ATR not available — no SL/TP calculated")
-
-            # --- Compose human-friendly message ---
+            # ================= TECHNICAL & FORECAST SUMMARY =================
             technical_summary = (
                 f"• Close ${latest['close']:.2f} | SMA20 {sma20:.2f} / SMA50 {sma50:.2f}\n"
-                f"• RSI {rsi:.1f} | ATR {atr:.2f} | MACD {macd_latest:.3f}/{macd_signal_latest:.3f} | ADX {adx:.1f if not pd.isna(adx) else 'n/a'}\n"
-                f"• Volume {latest['volume']:,} (MA20 {vol_ma:,.0f}) | ROC {roc:.2f}%"
+                f"• RSI {rsi:.1f} | ATR {atr:.2f} | MACD {macd_latest:.2f}/{macd_signal_latest:.2f} | ADX {adx:.1f}"
             )
 
-            ai_line = f"• AI Forecast: {ai_trend or 'N/A'} ({ai_conf:.1f}% confidence)" if forecast_result else "• AI Forecast: N/A"
+            forecast_summary = (
+                f"• AI Forecast: ${current_price:.2f} → ${forecast_price:.2f} ({trend}, {confidence}% confidence)"
+                if forecast_result else "• AI Forecast: N/A"
+            )
 
-            # Build reason text with bullets
-            reasons_text = "\n".join(f"→ {r}" for r in reasons)
+            signal_summary = f"🔔 *Signal: {action}*\n" + "\n".join(f"→ {r}" for r in signal_reason)
 
             ticker_msg = (
                 f"📊 *{ticker}*\n"
                 f"{technical_summary}\n"
-                f"{ai_line}\n\n"
-                f"🔔 *Decision: {action}*  (score {score:.2f})\n\n"
-                f"🧠 *Why:*\n{reasons_text}\n"
+                f"{forecast_summary}\n\n"
+                f"{signal_summary}"
             )
 
-            # Optionally include SL/TP in top line if present
-            if sl and tp:
-                ticker_msg += f"\n⛑️ SL: ${sl:.2f} | 🎯 TP: ${tp:.2f} | R:R: {rr:.2f}\n"
-
-            # Append & log
             summary_messages.append(ticker_msg)
-            log_message(f"{ticker} decision={action} score={score:.2f} | {', '.join(reasons[:3])}...")
+            log_message(f"{ticker}: {action} — {', '.join(signal_reason)}")
 
         except Exception as e:
             log_message(f"❌ Error processing {ticker}: {e}")
             continue
 
-    # --- Send consolidated message (Telegram + Email optional) ---
+    # ================= SEND SUMMARY TO TELEGRAM =================
     if summary_messages:
-        header = f"📈 *Hybrid AI+Technical Live Scan — {now.strftime('%b %d %H:%M')}*\n\n"
-        msg = header + "\n\n".join(summary_messages)
+        msg = f"📈 *AI + Technical Live Scan & Backtest — {now.strftime('%b %d %H:%M')}*\n\n" + "\n\n".join(summary_messages)
         send_message(msg)
-        try:
-            # optional email too (only if configured)
-            if EMAIL_SMTP and EMAIL_FROM and EMAIL_TO:
-                send_email(f"Live Scan — {now.strftime('%Y-%m-%d %H:%M')}", msg)
-        except Exception as e:
-            log_message(f"⚠️ Email send failed: {e}")
-        log_message("📩 Sent consolidated summary to Telegram (and email if configured)")
+        log_message("📩 Sent consolidated summary to Telegram")
     else:
         log_message("ℹ️ No actionable signals this run.")
 
-    # --- Auto Position Management (close losers etc.) ---
+    # ================= AUTO POSITION MANAGEMENT =================
     try:
         manage_positions()
         log_message("✅ Position management complete")
     except Exception as e:
         log_message(f"⚠️ manage_positions failed: {e}")
+
+
+# -------------------- FULL INTEGRATION: REGIME / FEATURES / MODEL / RISK / EXEC --------------------
+import os
+import joblib
+import math
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+from ta.trend import ADXIndicator
+
+# Config (override via environment)
+MODEL_DIR = os.getenv("MODEL_DIR", "models/sklearn")
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+DRY_RUN = os.getenv("DRY_RUN", "true").lower() in ("1", "true", "yes")
+RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "0.5"))  # percent of equity to risk
+MAX_SHARES_PER_TRADE = int(os.getenv("MAX_SHARES_PER_TRADE", "1000"))
+MIN_EQUITY_FOR_TRADING = float(os.getenv("MIN_EQUITY_FOR_TRADING", "1000"))
+
+TRAIN_DAYS = int(os.getenv("TRAIN_DAYS", "90"))  # days of historical data for training
+TRAIN_MIN_SAMPLES = int(os.getenv("TRAIN_MIN_SAMPLES", "120"))
+
+# ---------------- Regime Detection ----------------
+def detect_market_regime(bars):
+    """
+    Simple regime detection:
+      - 'Bullish' if short SMA > long SMA and ADX > 20
+      - 'Bearish' if short SMA < long SMA and ADX > 20
+      - 'Sideways' otherwise
+    Returns dict with type and confidence (0-100)
+    """
+    try:
+        df = bars.copy()
+        if len(df) < 60:
+            return {"type": "Insufficient Data", "confidence": 0.0}
+
+        df = safe_tz_localize_and_convert(df) if df.index.tz is None else df
+        df["SMA20"] = df["close"].rolling(20).mean()
+        df["SMA100"] = df["close"].rolling(100).mean()
+        try:
+            df["ADX"] = ADXIndicator(df["high"], df["low"], df["close"], window=14).adx()
+        except Exception:
+            df["ADX"] = np.nan
+
+        sma20 = df["SMA20"].iloc[-1]
+        sma100 = df["SMA100"].iloc[-1]
+        adx = df["ADX"].iloc[-1] if not pd.isna(df["ADX"].iloc[-1]) else 0.0
+
+        # basic rules
+        if pd.isna(sma20) or pd.isna(sma100):
+            return {"type": "Insufficient SMA", "confidence": 0.0}
+
+        if sma20 > sma100 and adx > 20:
+            conf = min(95, 40 + (adx))  # arbitrary mapping
+            return {"type": "Bullish", "confidence": float(conf)}
+        elif sma20 < sma100 and adx > 20:
+            conf = min(95, 40 + (adx))
+            return {"type": "Bearish", "confidence": float(conf)}
+        else:
+            conf = max(30, 60 - (abs(sma20 - sma100) / (sma100 + 1) * 100))
+            return {"type": "Sideways", "confidence": float(conf)}
+    except Exception as e:
+        log_message(f"⚠️ detect_market_regime failed: {e}")
+        return {"type": "Error", "confidence": 0.0}
+
+# ---------------- Feature Engineering ----------------
+def create_features(bars):
+    """
+    Returns (features_df, full_df) where features_df is the ML-ready numeric matrix.
+    Adds indicators (SMA, RSI, ATR, MACD diff, returns, vol ratios, ROC, ADX).
+    """
+    df = bars.copy()
+    if df.empty:
+        return pd.DataFrame(), df
+
+    df = safe_tz_localize_and_convert(df) if df.index.tz is None else df
+    df["SMA20"] = df["close"].rolling(20).mean()
+    df["SMA50"] = df["close"].rolling(50).mean()
+    df["SMA100"] = df["close"].rolling(100).mean()
+    df["RSI"] = compute_rsi(df["close"], 14)
+    df["ATR"] = compute_atr(df[["high", "low", "close"]], 14)
+    macd, macd_signal = compute_macd(df["close"])
+    df["MACD"] = macd
+    df["MACD_SIGNAL"] = macd_signal
+    df["MACD_DIFF"] = df["MACD"] - df["MACD_SIGNAL"]
+    df["RET_1"] = df["close"].pct_change(1)
+    df["RET_5"] = df["close"].pct_change(5)
+    df["VOL_MA20"] = df["volume"].rolling(20).mean()
+    df["VOL_RATIO"] = df["volume"] / (df["VOL_MA20"].replace(0, np.nan))
+    df["ROC_10"] = df["close"].pct_change(10) * 100
+    try:
+        df["ADX"] = ADXIndicator(df["high"], df["low"], df["close"], 14).adx()
+    except Exception:
+        df["ADX"] = np.nan
+
+    # Select features for model (ensure they exist)
+    feature_cols = ["SMA20", "SMA50", "SMA100", "RSI", "ATR", "MACD_DIFF", "RET_1", "RET_5", "VOL_RATIO", "ROC_10", "ADX"]
+    available = [c for c in feature_cols if c in df.columns]
+    feat_df = df[available].copy()
+
+    # Drop rows with NaNs at head
+    feat_df = feat_df.replace([np.inf, -np.inf], np.nan).dropna()
+    return feat_df, df
+
+# ---------------- Labels utility ----------------
+def make_labels_for_direction(bars, horizon=5, threshold=0.001):
+    """
+    Binary label: 1 if price after 'horizon' bars increases by > threshold fraction, else 0.
+    horizon: integer number of bars into the future (e.g., 5)
+    threshold: fraction, e.g., 0.001 => 0.1%
+    """
+    df = bars.copy()
+    df = df.reset_index(drop=True)
+    df["future_close"] = df["close"].shift(-horizon)
+    df["pct_future"] = (df["future_close"] - df["close"]) / df["close"]
+    labels = (df["pct_future"] > threshold).astype(int)
+    labels.index = df.index
+    return labels.dropna()
+
+# ---------------- Model storage helpers ----------------
+def model_file_for(ticker):
+    safe = ticker.replace("/", "_").replace("^", "_")
+    return os.path.join(MODEL_DIR, f"{safe}_rf.joblib")
+
+def train_and_save_model(ticker, feat_df, labels, force_retrain=False):
+    """
+    Trains a RandomForestClassifier and saves it to disk.
+    Returns the trained model or None.
+    """
+    try:
+        if feat_df.empty or labels.empty:
+            log_message(f"⚠️ No data to train for {ticker}")
+            return None
+
+        # Align by index
+        feat_df = feat_df.loc[labels.index.intersection(feat_df.index)]
+        labels = labels.loc[feat_df.index]
+        if len(feat_df) < TRAIN_MIN_SAMPLES:
+            log_message(f"⚠️ Not enough samples to train {ticker} (n={len(feat_df)})")
+            return None
+
+        X = feat_df.values
+        y = labels.values
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+        clf = RandomForestClassifier(n_estimators=200, max_depth=8, random_state=42, n_jobs=2)
+        clf.fit(X_train, y_train)
+        acc = accuracy_score(y_test, clf.predict(X_test))
+        joblib.dump(clf, model_file_for(ticker))
+        log_message(f"💾 Trained model for {ticker} (acc={acc:.3f}) -> {model_file_for(ticker)}")
+        return clf
+    except Exception as e:
+        log_message(f"❌ train_and_save_model failed for {ticker}: {e}")
+        return None
+
+def load_model_if_exists(ticker):
+    path = model_file_for(ticker)
+    try:
+        if os.path.exists(path):
+            return joblib.load(path)
+    except Exception as e:
+        log_message(f"⚠️ Failed to load model {path}: {e}")
+    return None
+
+# ---------------- Auto-train pipeline ----------------
+def auto_train_models():
+    """
+    Train models for all tickers using recent historical data and save them.
+    Intended to run nightly (GitHub Action or cron).
+    """
+    log_message("🧠 Starting auto_train_models pipeline...")
+    trained = 0
+    for ticker in tickers:
+        try:
+            # fetch historical minute bars for TRAIN_DAYS days; use daily if minute not available
+            end = datetime.now(EST)
+            start = end - timedelta(days=TRAIN_DAYS)
+            try:
+                bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute, start=start.isoformat(), end=end.isoformat(), feed="iex").df
+            except Exception:
+                bars = api.get_bars(ticker, tradeapi.TimeFrame.Day, limit=TRAIN_DAYS).df
+
+            if bars.empty or len(bars) < TRAIN_MIN_SAMPLES:
+                log_message(f"⚠️ Not enough data for training {ticker} (have {len(bars)} rows)")
+                continue
+
+            feat_df, full_df = create_features(bars)
+            labels = make_labels_for_direction(full_df, horizon=5, threshold=0.001)
+            model = train_and_save_model(ticker, feat_df, labels, force_retrain=True)
+            if model:
+                trained += 1
+        except Exception as e:
+            log_message(f"❌ auto_train_models failed for {ticker}: {e}")
+            continue
+
+    log_message(f"🏁 auto_train_models complete — models trained: {trained}/{len(tickers)}")
+
+# ---------------- Risk & Sizing ----------------
+def calculate_position_size(account_equity, risk_pct, entry_price, stop_price, max_shares=None):
+    """
+    Fixed-fraction sizing using dollar risk:
+      qty = floor( (equity * risk_pct/100) / (abs(entry-stop)) )
+    Returns integer share qty (>=0).
+    """
+    try:
+        if entry_price is None or stop_price is None or entry_price == stop_price:
+            return 0
+        dollar_risk = account_equity * (risk_pct / 100.0)
+        per_share_risk = abs(entry_price - stop_price)
+        if per_share_risk <= 0:
+            return 0
+        qty = int(math.floor(dollar_risk / per_share_risk))
+        if max_shares:
+            qty = min(qty, max_shares)
+        return max(0, qty)
+    except Exception as e:
+        log_message(f"⚠️ calculate_position_size failed: {e}")
+        return 0
+
+# ---------------- Execution Engine ----------------
+def execute_trade(action, symbol, qty, limit_price=None, client=None, dry_run=DRY_RUN):
+    """
+    Execute (or dry-run) a simple market order using Alpaca.
+    Returns result dict with status and details.
+    """
+    result = {"symbol": symbol, "action": action, "qty": qty, "status": "skipped"}
+    try:
+        if qty <= 0:
+            result["status"] = "no_shares"
+            log_message(f"⚠️ Not executing {action} {symbol}: qty={qty}")
+            return result
+
+        if dry_run:
+            result["status"] = "dry_run"
+            log_message(f"🔁 Dry-run: {action} {qty}x {symbol} (no real order sent)")
+            return result
+
+        api_client = client if client is not None else api
+        side = "buy" if action.upper().startswith("B") else "sell"
+        if limit_price:
+            order = api_client.submit_order(symbol=symbol, qty=qty, side=side, type="limit", time_in_force="day", limit_price=str(limit_price))
+        else:
+            order = api_client.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
+        result["status"] = "sent"
+        result["order"] = getattr(order, "_raw", str(order))
+        log_message(f"✅ Sent order: {action} {qty} {symbol}")
+        return result
+    except Exception as e:
+        result["status"] = "error"
+        result["error"] = str(e)
+        log_message(f"❌ Order execution failed for {symbol}: {e}")
+        return result
+
+# ---------------- Upgraded live_trading_loop (user-friendly telegram messages) ----------------
+def live_trading_loop(backtest_days=0):
+    """
+    Runs the live trading loop and optionally backtests the last N days.
+    
+    Parameters:
+        backtest_days (int): Number of previous days to simulate for backtesting.
+                             0 = live only.
+    """
+    now = datetime.now(EST)
+    log_message(f"🚀 Starting trading loop at {now.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    if now.weekday() >= 5:
+        log_message("ℹ️ Weekend — skipping live trading.")
+        return
+
+    summary_messages = []
+
+    for ticker in tickers:
+        try:
+            # ================= BACKTEST =================
+            if backtest_days > 0:
+                log_message(f"🧪 Running backtest for {ticker} ({backtest_days} days)")
+                df_trades = backtest_ticker(
+                    ticker,
+                    start_date=(now - timedelta(days=backtest_days)).isoformat(),
+                    end_date=now.isoformat()
+                )
+                if df_trades is not None and not df_trades.empty:
+                    total_trades = len(df_trades)
+                    pnl_total = df_trades["pnl"].sum()
+                    win_rate = len(df_trades[df_trades["pnl"] > 0]) / total_trades * 100
+                    summary_messages.append(
+                        f"📊 Backtest {ticker}: Trades={total_trades}, "
+                        f"P&L=${pnl_total:.2f}, Win Rate={win_rate:.1f}%"
+                    )
+
+            # ================= LIVE DATA =================
+            log_message(f"🔍 Fetching live data for {ticker}...")
+            end = now
+            start = end - timedelta(hours=6)
+            bars = api.get_bars(
+                ticker, tradeapi.TimeFrame.Minute,
+                start=start.isoformat(), end=end.isoformat(), feed="iex"
+            ).df
+
+            if bars.empty:
+                log_message(f"⚠️ No market data for {ticker}")
+                continue
+
+            bars = safe_tz_localize_and_convert(bars)
+
+            # ================= FEATURE ENGINEERING =================
+            bars["SMA20"] = bars["close"].rolling(SMA_SHORT).mean()
+            bars["SMA50"] = bars["close"].rolling(SMA_LONG).mean()
+            bars["RSI"] = compute_rsi(bars["close"], 14)
+            bars["ATR"] = compute_atr(bars[["high", "low", "close"]], ATR_PERIOD)
+            macd, macd_signal = compute_macd(bars["close"])
+            adx_indicator = ADXIndicator(bars["high"], bars["low"], bars["close"], window=14)
+            adx = adx_indicator.adx().iloc[-1] if len(bars) >= 14 else np.nan
+
+            latest = bars.iloc[-1]
+            sma20, sma50 = bars["SMA20"].iloc[-1], bars["SMA50"].iloc[-1]
+            rsi, atr = bars["RSI"].iloc[-1], bars["ATR"].iloc[-1]
+            macd_latest, macd_signal_latest = macd.iloc[-1], macd_signal.iloc[-1]
+
+            # ================= AI FORECAST =================
+            forecast_result = deep_learning_forecast(ticker, bars, sheet if 'sheet' in globals() else None)
+            if forecast_result:
+                forecast_price = forecast_result["forecast"]
+                current_price = forecast_result["current"]
+                trend = forecast_result["trend"]
+                confidence = forecast_result["confidence"]
+            else:
+                forecast_price = current_price = trend = confidence = None
+
+            # ================= SIGNAL GENERATION =================
+            signal_reason = []
+            action = "HOLD"
+
+            if sma20 > sma50 and macd_latest > macd_signal_latest and rsi < 70 and adx > 20:
+                action = "BUY"
+                signal_reason.extend([
+                    "✅ SMA20 above SMA50 → bullish trend",
+                    "✅ MACD bullish crossover",
+                    f"✅ RSI healthy at {rsi:.1f}",
+                    f"✅ ADX {adx:.1f} indicates strong trend"
+                ])
+                if trend == "Up" and confidence >= 60:
+                    signal_reason.append(f"🤖 AI confirms upward momentum ({confidence}% confidence)")
+
+            elif sma20 < sma50 and macd_latest < macd_signal_latest and rsi > 30 and adx > 20:
+                action = "SELL"
+                signal_reason.extend([
+                    "❌ SMA20 below SMA50 → bearish trend",
+                    "❌ MACD bearish crossover",
+                    f"❌ RSI weakening at {rsi:.1f}",
+                    f"❌ ADX {adx:.1f} indicates strong downtrend"
+                ])
+                if trend == "Down" and confidence >= 60:
+                    signal_reason.append(f"🤖 AI confirms downward momentum ({confidence}% confidence)")
+            else:
+                action = "HOLD"
+                signal_reason.append("⚖️ Mixed or neutral signals — waiting for confirmation.")
+
+            # ================= TECHNICAL & FORECAST SUMMARY =================
+            technical_summary = (
+                f"• Close ${latest['close']:.2f} | SMA20 {sma20:.2f} / SMA50 {sma50:.2f}\n"
+                f"• RSI {rsi:.1f} | ATR {atr:.2f} | MACD {macd_latest:.2f}/{macd_signal_latest:.2f} | ADX {adx:.1f}"
+            )
+
+            forecast_summary = (
+                f"• AI Forecast: ${current_price:.2f} → ${forecast_price:.2f} ({trend}, {confidence}% confidence)"
+                if forecast_result else "• AI Forecast: N/A"
+            )
+
+            signal_summary = f"🔔 *Signal: {action}*\n" + "\n".join(f"→ {r}" for r in signal_reason)
+
+            ticker_msg = (
+                f"📊 *{ticker}*\n"
+                f"{technical_summary}\n"
+                f"{forecast_summary}\n\n"
+                f"{signal_summary}"
+            )
+
+            summary_messages.append(ticker_msg)
+            log_message(f"{ticker}: {action} — {', '.join(signal_reason)}")
+
+        except Exception as e:
+            log_message(f"❌ Error processing {ticker}: {e}")
+            continue
+
+    # ================= SEND SUMMARY TO TELEGRAM =================
+    if summary_messages:
+        msg = f"📈 *AI + Technical Live Scan & Backtest — {now.strftime('%b %d %H:%M')}*\n\n" + "\n\n".join(summary_messages)
+        send_message(msg)
+        log_message("📩 Sent consolidated summary to Telegram")
+    else:
+        log_message("ℹ️ No actionable signals this run.")
+
+    # ================= AUTO POSITION MANAGEMENT =================
+    try:
+        manage_positions()
+        log_message("✅ Position management complete")
+    except Exception as e:
+        log_message(f"⚠️ manage_positions failed: {e}")
+
 
 
 
@@ -842,17 +1162,54 @@ def morning_scan():
     send_message(msg)
     log_message("✅ Morning scan completed")
 
-# ================= ENTRY POINT =================
+
+def auto_train_models():
+    import joblib, os
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.model_selection import train_test_split
+
+    os.makedirs("models/sklearn", exist_ok=True)
+    log_message("🚀 Starting nightly auto-train pipeline...")
+
+    for ticker in tickers:
+        try:
+            bars = api.get_bars(ticker, tradeapi.TimeFrame.Day, limit=200).df
+            if bars.empty:
+                continue
+
+            features, target = create_features(bars)
+            X_train, X_test, y_train, y_test = train_test_split(features, target, test_size=0.2, shuffle=False)
+
+            model = RandomForestClassifier(n_estimators=100, random_state=42)
+            model.fit(X_train, y_train)
+            score = model.score(X_test, y_test)
+
+            joblib.dump(model, f"models/sklearn/{ticker}_model.pkl")
+            log_message(f"✅ {ticker} model trained & saved (Accuracy: {score:.2f})")
+
+        except Exception as e:
+            log_message(f"❌ Error training model for {ticker}: {e}")
+
+
+def retrain_all_models():
+    log_message("🔁 Running full model retrain (weekly refresh)...")
+    auto_train_models()
+    log_message("🏁 Weekly retrain complete.")
+
+
 if __name__ == "__main__":
     import sys
-    mode = sys.argv[1] if len(sys.argv) > 1 else "analysis"
-    log_message(f"Starting script in mode: {mode}")
-    if mode == "analysis":
+    if len(sys.argv) < 2:
+        print("Usage: python moving_average_bot.py [morning|analysis|live|backtest|auto_train]")
+        sys.exit(1)
+    mode = sys.argv[1]
+    if mode == "morning":
+        live_trading_loop()
+    elif mode == "analysis":
         previous_day_analysis()
     elif mode == "live":
         live_trading_loop()
-    elif mode == "morning":
-        send_top_movers_to_telegram(top_n=15)
-        morning_scan()
-    else:
-        log_message(f"Unknown mode: {mode}")
+    elif mode == "backtest":
+        backtest()
+    elif mode == "auto_train":
+        auto_train_models()
