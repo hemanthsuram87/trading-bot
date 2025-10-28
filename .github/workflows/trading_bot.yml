@@ -1,27 +1,20 @@
 name: Trading Bot Schedule
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
   schedule:
-    # Morning pre-market run at 08:30 AM EST (12:30 UTC)
-    - cron: '30 12 * * 1-5'
-    # After-market run at 05:00 PM EST (21:00 UTC)
-    - cron: '0 21 * * 1-5'
-    # Live trading loop every 10 minutes during market hours (14:30-21:00 UTC)
-    - cron: '*/10 14-20 * * 1-5'
-    # Nightly auto-train/backtest at 02:00 AM EST (06:00 UTC)
-    - cron: '0 6 * * 1-5'
+    - cron: '30 12 * * 1-5'  # Morning pre-market
+    - cron: '0 21 * * 1-5'   # After-market previous-day analysis
+    - cron: '*/10 14-20 * * 1-5'  # Live trading
+    - cron: '0 6 * * 1-5'    # Nightly backtest + auto-train
 
 jobs:
   trading_bot:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -29,13 +22,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pandas lxml html5lib yfinance scikit-learn
+          pip install pandas lxml html5lib yfinance scikit-learn ta requests
 
-      - name: 🔑 Create Google credentials file
+      - name: Create Google credentials
         run: echo '${{ secrets.SERVICE_ACCOUNT_JSON }}' > google_creds.json
 
-      - name: Set Environment Variables
-        run: echo "Environment variables loaded"
+      - name: Set env vars
+        run: echo "Env vars loaded"
         env:
           ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
           ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
@@ -43,22 +36,18 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
 
-      # ===== Morning Pre-Market Scan =====
       - name: Morning Scan
         if: github.event_name == 'schedule' && github.event.schedule == '30 12 * * 1-5'
         run: python moving_average_bot.py morning
 
-      # ===== After-Market Previous-Day Analysis =====
       - name: Previous-Day Analysis
         if: github.event_name == 'schedule' && github.event.schedule == '0 21 * * 1-5'
         run: python moving_average_bot.py analysis
 
-      # ===== Live Trading Loop =====
       - name: Live Trading
         if: github.event_name == 'schedule' && startsWith(github.event.schedule, '*/10')
         run: python moving_average_bot.py live
 
-      # ===== Nightly Backtest & Auto-Train Models =====
       - name: Backtest + Auto-Train
         if: github.event_name == 'schedule' && github.event.schedule == '0 6 * * 1-5'
         run: |
