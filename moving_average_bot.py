@@ -1060,7 +1060,7 @@ def backtest_strategy_with_report():
     a detailed performance report + chart to Telegram.
     """
     end_date = datetime.now(EST)
-    start_date = end_date - timedelta(days=7)  # last 7 days default
+    start_date = end_date - timedelta(days=180)  # last 7 days default
     log_message(f"🧩 Starting backtest from {start_date} to {end_date} for {len(tickers)} tickers")
 
     results = []
