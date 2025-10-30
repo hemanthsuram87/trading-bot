@@ -38,7 +38,7 @@ jobs:
           NEWS_API_KEY: ${{ secrets.NEWS_API_KEY}}
 
       - name: Morning Scan
-        if: github.event_name == 'schedule' && github.event.schedule == '30 12 * * 1-5'
+        if: github.event_name == 'schedule' && github.event.schedule == '*/15 12-14 * * 1-5'
         run: python moving_average_bot.py morning
 
       - name: Previous-Day Analysis
