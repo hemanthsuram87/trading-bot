@@ -5,7 +5,7 @@ on:
   schedule:
     - cron: '*/25 12-14 * * 1-5'  # Morning pre-market
     - cron: '0 21 * * 1-5'   # After-market previous-day analysis
-    - cron: '*/10 14-20 * * 1-5'  # Live trading
+    - cron: '*/10 13-20 * * 1-5'  # Live trading
     - cron: '0 6 * * 1-5'    # Nightly backtest + auto-train
 
 jobs:
