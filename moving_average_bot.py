@@ -99,11 +99,6 @@ EST = pytz.timezone("US/Eastern")
 CLOSE_LOSS_PCT = float(os.getenv("CLOSE_LOSS_PCT", "-5"))  # negative percent threshold to close (e.g. -5 -> -5%)
 MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "240"))  # max minutes to keep a position
 
-SMA_SHORT = 20 
-SMA_LONG = 50 
-ATR_PERIOD = 14 
-ATR_MULTIPLIER = 1 
-SIGNAL_EXPIRY_DAYS = 2
 
 BACKTEST_DAYS = 60  # Adjustable, conservative by default
 MODEL_DIR = "models/sklearn/"
@@ -255,6 +250,8 @@ def compute_macd(close):
 # ================= AI FORECAST (safeguarded) =================
 tf.random.set_seed(42)
 np.random.seed(42)
+
+
 
 def deep_learning_forecast(ticker, bars, sheet=None, lookback=60, forecast_steps=1, retrain=False):
     try:
@@ -1336,23 +1333,73 @@ def morning_scan():
     send_message(msg)
     log_message("✅ Morning scan completed")
 
+from itertools import product
+
+# ================= AUTOMATIC MODEL TRAINING =================
+def auto_train_models(retrain=False, lookback_days=90, min_samples=50):
+    """
+    Automatically fetch historical data, create features, train models, and save them.
+    Parameters:
+        tickers (list): list of tickers to train
+        retrain (bool): force retrain even if model exists
+        lookback_days (int): how many past days to use for training
+        min_samples (int): minimum number of bars required to train
+    """
+    log_message(f"🚀 Starting auto-train for {len(tickers)} tickers (retrain={retrain})")
+
+    for ticker in tickers:
+        try:
+            end_dt = datetime.now(EST)
+            start_dt = end_dt - timedelta(days=lookback_days)
+            
+            # Fetch historical bars
+            bars = api.get_bars(
+                ticker,
+                tradeapi.TimeFrame.Day,
+                start=start_dt.isoformat(),
+                end=end_dt.isoformat(),
+                adjustment="raw",
+                feed="iex"
+            ).df
+
+            if bars.empty or len(bars) < min_samples:
+                log_message(f"⚠️ Not enough data to train {ticker} (n={len(bars)})")
+                continue
+
+            # Create features and labels
+            feat_df, full_df = create_features(bars)
+            labels = make_labels_for_direction(full_df, horizon=5, threshold=0.001)
+
+            if feat_df.empty or labels.empty:
+                log_message(f"⚠️ Features or labels empty for {ticker}")
+                continue
+
+            # Train model
+            model = train_and_save_model(ticker, feat_df, labels, force_retrain=retrain)
+            if model:
+                log_message(f"✅ Model trained for {ticker}")
+            else:
+                log_message(f"❌ Model training failed for {ticker}")
+
+        except Exception as e:
+            log_message(f"❌ Auto-train failed for {ticker}: {e}")
 
 
 
 if __name__ == "__main__":
-
     if len(sys.argv) < 2:
         print("Usage: python moving_average_bot.py [morning|analysis|live|backtest|auto_train]")
         sys.exit(1)
     mode = sys.argv[1]
     if mode == "morning":
+        auto_train_models(retrain=False)  # retrain=True to force training
         get_top_gap_gainers()
         morning_scan()
     elif mode == "analysis":
         previous_day_analysis()
-    elif mode == "live":
+    elif mode == "live":      
         live_trading_loop()
+        backtest_strategy_with_report()
     elif mode == "backtest":
+       auto_train_models(retrain=False)
        backtest_strategy_with_report()
-    elif mode == "auto_train":
-       live_trading_loop()
