@@ -28,4 +28,4 @@ html5lib>=1.1
 newsapi-python
 matplotlib>=3.9.0
 joblib>=1.3.0
-finvizfinance>=1.4.4
+finvizfinance
