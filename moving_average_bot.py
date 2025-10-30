@@ -62,7 +62,7 @@ ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 api_key = os.getenv("FMP_API_KEY")
-NEWS_API_KEY = "fa1d035152ac4016bd4d8647244d1748"
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, base_url=ALPACA_BASE_URL)
 
 EST = pytz.timezone("US/Eastern")
