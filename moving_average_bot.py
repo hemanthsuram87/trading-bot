@@ -5,12 +5,12 @@ import json
 import requests
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta, time as dt_time,UTC
 import tensorflow as tf
 from tensorflow.keras.models import load_model
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.layers import LSTM, Dense
-from tensorflow.keras import Sequential
+from tensorflow.keras.models import Sequential
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
@@ -20,13 +20,14 @@ import logging
 # TA libs (some functions use ta)
 import ta
 from ta.trend import ADXIndicator
-
+import yfinance as yf
 # Alpaca
 import alpaca_trade_api as tradeapi
-
+from finvizfinance.screener.overview import Overview
 
 import matplotlib.pyplot as plt
-
+from ta.trend import ADXIndicator, MACD
+from ta.momentum import RSIIndicator
 
 import joblib
 import math
@@ -37,6 +38,20 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 from ta.trend import ADXIndicator
+import io
+
+import html
+import re
+import sys
+import os
+import numpy as np
+import pandas as pd
+from datetime import datetime
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import accuracy_score
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
+from tensorflow.keras.callbacks import EarlyStopping
 
 # ================= CONFIG =================
 ALPACA_KEY = os.getenv("ALPACA_KEY")
@@ -47,7 +62,7 @@ ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 api_key = os.getenv("FMP_API_KEY")
-
+NEWS_API_KEY = "fa1d035152ac4016bd4d8647244d1748"
 api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, base_url=ALPACA_BASE_URL)
 
 EST = pytz.timezone("US/Eastern")
@@ -72,6 +87,34 @@ SIGNAL_EXPIRY_DAYS = int(os.getenv("SIGNAL_EXPIRY_DAYS", "5"))
 LOG_DIR = "logs"
 SIGNAL_DIR = "signals"
 MODEL_DIR = "models"
+
+os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(SIGNAL_DIR, exist_ok=True)
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+# logging
+EST = pytz.timezone("US/Eastern")
+
+# Auto close settings
+CLOSE_LOSS_PCT = float(os.getenv("CLOSE_LOSS_PCT", "-5"))  # negative percent threshold to close (e.g. -5 -> -5%)
+MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "240"))  # max minutes to keep a position
+
+SMA_SHORT = 20 
+SMA_LONG = 50 
+ATR_PERIOD = 14 
+ATR_MULTIPLIER = 1 
+SIGNAL_EXPIRY_DAYS = 2
+
+BACKTEST_DAYS = 60  # Adjustable, conservative by default
+MODEL_DIR = "models/sklearn/"
+LOG_DIR = "logs"
+SIGNAL_DIR = "signals"
+MODEL_DIR = "models"
+
+INITIAL_CAPITAL = 10000
+COMMISSION = 0.001  # 0.1%
+RISK_PER_TRADE = 0.02  # 2% risk per trade
+
 
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(SIGNAL_DIR, exist_ok=True)
@@ -215,30 +258,41 @@ np.random.seed(42)
 
 def deep_learning_forecast(ticker, bars, sheet=None, lookback=60, forecast_steps=1, retrain=False):
     try:
-        df = bars[["close"]].dropna().reset_index(drop=True)
+        # --- Features ---
+        df = bars[['open', 'high', 'low', 'close', 'volume']].dropna().reset_index(drop=True)
         if len(df) < lookback + forecast_steps + 1:
             log_message(f"⚠️ Not enough data for LSTM {ticker}")
             return None
 
+        # Compute returns
+        df['return'] = df['close'].pct_change().fillna(0)
+        feature_cols = ['open', 'high', 'low', 'close', 'volume', 'return']
+
         scaler = MinMaxScaler()
-        scaled = scaler.fit_transform(df.values.reshape(-1, 1))
+        scaled = scaler.fit_transform(df[feature_cols].values)
 
         X, y = [], []
         for i in range(lookback, len(scaled) - forecast_steps):
-            X.append(scaled[i - lookback:i])
-            y.append(scaled[i + forecast_steps][0])
+            X.append(scaled[i-lookback:i])
+            # classify next step return as direction
+            next_return = df['return'].iloc[i + forecast_steps]
+            y.append(1 if next_return > 0 else 0)  # 1 = bullish, 0 = bearish
         X, y = np.array(X), np.array(y)
         if X.size == 0:
             return None
 
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
+        # Walk-forward style split (last 20% for validation)
+        split_idx = int(0.8 * len(X))
+        X_train, X_val = X[:split_idx], X[split_idx:]
+        y_train, y_val = y[:split_idx], y[split_idx:]
 
-        model_path = os.path.join(MODEL_DIR, f"{ticker}_lstm.h5")
+        # --- Model path ---
+        model_path = os.path.join(MODEL_DIR, f"{ticker}_lstm_trend.h5")
         model = None
         if os.path.exists(model_path) and not retrain:
             try:
                 model = load_model(model_path, compile=False)
-                model.compile(optimizer="adam", loss="mse")
+                model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
                 log_message(f"✅ Loaded model for {ticker}")
             except Exception as e:
                 log_message(f"⚠️ Model load failed ({ticker}): {e}")
@@ -246,45 +300,52 @@ def deep_learning_forecast(ticker, bars, sheet=None, lookback=60, forecast_steps
 
         if model is None:
             model = Sequential([
-                LSTM(64, return_sequences=True, input_shape=(lookback, 1)),
-                LSTM(32),
-                Dense(1)
+                Bidirectional(LSTM(64, return_sequences=True), input_shape=(lookback, len(feature_cols))),
+                Dropout(0.2),
+                Bidirectional(LSTM(32)),
+                Dropout(0.2),
+                Dense(1, activation='sigmoid')  # output probability
             ])
-            model.compile(optimizer="adam", loss="mse")
-            es = EarlyStopping(monitor="val_loss", patience=3, restore_best_weights=True)
-            model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=10, batch_size=32, verbose=0, callbacks=[es])
+            model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+            es = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+            model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=50, batch_size=32, verbose=0, callbacks=[es])
             model.save(model_path)
             log_message(f"💾 Model trained & saved for {ticker}")
 
-        last_seq = scaled[-lookback:].reshape((1, lookback, 1))
-        forecast_scaled = model.predict(last_seq, verbose=0)[0][0]
-        forecast_price = scaler.inverse_transform([[forecast_scaled]])[0][0]
-        current = df["close"].iloc[-1]
+        # --- Forecast ---
+        last_seq = scaled[-lookback:].reshape((1, lookback, len(feature_cols)))
+        prob = model.predict(last_seq, verbose=0)[0][0]
+        trend = "BULLISH" if prob > 0.5 else "BEARISH"
+        confidence = round(prob*100, 2) if trend=="BULLISH" else round((1-prob)*100,2)
+        current_price = df['close'].iloc[-1]
 
-        # validation rmse -> confidence
-        y_pred_val = model.predict(X_val, verbose=0)
-        rmse = np.sqrt(mean_squared_error(y_val, y_pred_val))
-        avg_val_price = np.mean(scaler.inverse_transform(y_val.reshape(-1, 1)))
-        confidence = max(0, 100 - (rmse / (avg_val_price + 1e-9) * 100))
+        # Approximate forecast price using last close + mean return
+        forecast_price = current_price * (1 + df['return'].iloc[-lookback:].mean())
 
-        trend = "BULLISH" if forecast_price > current else "BEARISH"
-
-        # Save to sheet if available
+        # --- Save to sheet if available ---
         if sheet:
             try:
                 try:
                     ws = sheet.worksheet("AI_Forecast")
                 except Exception:
                     ws = sheet.add_worksheet(title="AI_Forecast", rows="1000", cols="10")
-                ws.append_row([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ticker, round(current, 2), round(forecast_price, 2), trend, round(confidence, 2)])
+                ws.append_row([datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                               str(ticker), float(round(current_price,2)), float(round(forecast_price,2)), str(trend), float(round(confidence))])
             except Exception as e:
-                log_message(f"⚠️ Sheets update failed for AI forecast: {e}")
+                log_message(f"⚠️ Sheets update failed: {e}")
 
-        return {"ticker": ticker, "trend": trend, "confidence": round(confidence, 2), "current": round(current, 2), "forecast": round(forecast_price, 2)}
+        return {
+            "ticker": ticker,
+            "trend": trend,
+            "confidence": confidence,
+            "current": round(current_price, 2),
+            "forecast": round(forecast_price, 2)
+        }
 
     except Exception as e:
         log_message(f"⚠️ AI forecast failed for {ticker}: {e}")
         return None
+
 
 # ================= SIGNAL ANALYSIS (core) =================
 def analyze_ticker(ticker, bars):
@@ -395,58 +456,135 @@ def analyze_ticker(ticker, bars):
         send_message(consolidated_msg)
         log_message(f"📩 Sent signals for {ticker}")
 
-# ================= TOP MOVERS =================
-def fetch_top_movers():
-    if not FMP_API_KEY:
-        log_message("⚠️ FMP API key not set.")
-        return [], []
-    base_url = "https://financialmodelingprep.com/api/v3"
-    try:
-        g = requests.get(f"{base_url}/stock/gainers?apikey={FMP_API_KEY}", timeout=10)
-        l = requests.get(f"{base_url}/stock/losers?apikey={FMP_API_KEY}", timeout=10)
-        g.raise_for_status(); l.raise_for_status()
-        return g.json(), l.json()
-    except Exception as e:
-        log_message(f"Error fetching top movers: {e}")
-        return [], []
+# ===================== HELPERS =====================
 
-def send_top_movers_to_telegram(top_n=15):
-    gainers, losers = fetch_top_movers()
-    if not gainers and not losers:
-        send_message("⚠️ Failed to fetch top movers from FMP.")
+
+def is_morning_window():
+    """Run only between 9:30–11:30 AM Eastern."""
+    now = datetime.now(pytz.timezone(TIMEZONE))
+    start = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    end = now.replace(hour=11, minute=30, second=0, microsecond=0)
+    return start <= now <= end
+
+def fetch_latest_news(category,page_size,api_key):
+    news_headlines = []
+    url = f"https://newsapi.org/v2/everything?q={category}&language=en&pageSize={page_size}&apiKey={api_key}"
+    response  = requests.get(url)
+    data = response.json()
+
+    if response.status_code !=200:
+        print(f"Failed to fetch news: {data.get('message', 'Unknown error')}")
+        return {'error': 'Failed to fetch news'}
+    else:
+        news = data.get("articles",[])
+
+        for news_item in news:
+            news_headlines.append(
+                {
+                    "title": news_item.get("title"),
+                    "link":news_item.get("url"),
+                    "description":news_item.get("description")
+                }
+            )
+        return news_headlines
+
+# ================= MORNING SCAN TOP MOVERS AND LOOSERS  =================
+
+def clean_text(text):
+    if not text:
+        return ""
+    # Remove HTML tags
+    text = re.sub(r'<[^>]+>', '', text)
+    # Remove zero-width and non-printable characters
+    text = re.sub(r'[\u200b-\u200d\uFEFF]', '', text)
+    return escape_text(text)
+
+def send_telegram_safe(message, chunk_size=4000):
+    lines = message.split("\n")
+    chunk = ""
+    for line in lines:
+        if len(chunk) + len(line) + 1 > chunk_size:
+            send_message(chunk)
+            chunk = ""
+        chunk += line + "\n"
+    if chunk:
+        send_message(chunk)
+
+def escape_text(text):
+    if not text:
+        return ""
+    return html.escape(str(text), quote=False)
+
+def safe_text(text):
+    if not text:
+        return ""
+    return html.escape(str(text), quote=False)  # escapes < > & but leaves quotes
+
+def get_top_gap_gainers(top_n=10):
+    filters_dict = {
+        'Current Volume': 'Over 500K',
+        'Gap': 'Up 10%',
+        'Industry':'Stocks only (ex-Funds)'
+    }
+
+    overview = Overview()
+    overview.set_filter(filters_dict=filters_dict)
+    df = overview.screener_view()
+
+    if df.empty:
+        print("No data found for top gainers.")
         return
-    msg = "📈 *Top Gainers*\n"
-    for s in gainers[:top_n]:
-        msg += f"{s.get('ticker', s.get('symbol',''))} | {s.get('price','')} | {s.get('changesPercentage','')}\n"
-    msg += "\n📉 *Top Losers*\n"
-    for s in losers[:top_n]:
-        msg += f"{s.get('ticker', s.get('symbol',''))} | {s.get('price','')} | {s.get('changesPercentage','')}\n"
-    send_message(msg)
-    log_message("✅ Top movers sent")
 
-# ================= POSITION MANAGEMENT (auto-close) =================
-def manage_positions():
-    try:
-        positions = api.list_positions()
-        for pos in positions:
-            try:
-                symbol = pos.symbol
-                qty = float(pos.qty)
-                unreal_plpc = float(pos.unrealized_plpc) if pos.unrealized_plpc is not None else 0.0
-                # unrealized_plpc is in fraction (e.g. 0.02), convert to percent:
-                unreal_pct = unreal_plpc * 100
-                # compute hold time from position's 'side' not always available; fallback skip time check
-                # Alpaca doesn't provide opened_at in Position object; we'll do a safe check via account activities (optional)
-                # For simplicity, auto-close if unreal_pct <= CLOSE_LOSS_PCT
-                if unreal_pct <= CLOSE_LOSS_PCT:
-                    log_message(f"⚠️ Auto-closing {symbol} due to unrealized pct {unreal_pct:.2f}% <= {CLOSE_LOSS_PCT}%")
-                    api.close_position(symbol)
-                    send_message(f"⚠️ Closed {symbol} (auto-close) due to loss threshold {CLOSE_LOSS_PCT}%")
-                   
-            except Exception as e:
-                log_message(f"⚠️ manage_positions per-position error: {e}")
-    except Exception as e:
-        log_message(f"⚠️ manage_positions error: {e}")
+    wanted_cols = ['Ticker', 'Price', 'Change', 'Volume', 'Average Volume (3 Month)', 'Gap', 'Volatility (Week)']
+    df = df[[c for c in wanted_cols if c in df.columns]]
+
+    # Convert numeric columns
+    for col in ['Change', 'Volume', 'Average Volume (3 Month)', 'Gap']:
+        if col in df.columns:
+            if df[col].dtype == object:
+                df[col] = df[col].str.replace(',', '', regex=False).astype(float)
+            else:
+                df[col] = df[col].astype(float)
+
+    # Fix percentages
+    df['Change'] = df['Change'] * 100
+    if 'Gap' in df.columns:
+        df['Gap'] = df['Gap'] * 100
+
+    # Filter only if today's volume > average volume
+    if 'Volume' in df.columns and 'Average Volume (3 Month)' in df.columns:
+        df = df[df['Volume'] > df['Average Volume (3 Month)']]
+
+    # Sort descending by Change and pick top N
+    df = df.sort_values(by='Change', ascending=False).head(top_n)
+
+    message = "<b>📊 Morning Movers Watchlist</b>\n\n"
+    newsmessage="<b> News for above Top Gainers </b> \n"
+    for _, row in df.iterrows():
+        message += (
+            f"🔹 Ticker: {row['Ticker']}\n"
+            f"💲 Price: {row['Price']}\n"
+            f"✅ Gap: {row['Change']:.2f}%\n"
+            f"🎯 Volume: {row['Volume']}\n"
+        )
+
+        # Fetch latest news safely
+        newslinks = fetch_latest_news(row['Ticker'], page_size=2, api_key=NEWS_API_KEY)
+        if newslinks and newslinks != {'error': 'Failed to fetch news'}:
+            for news_item in newslinks:
+               title = html.escape(news_item.get('title') or "")
+               link = html.escape(news_item.get('link') or "")
+               newsmessage += (f"Ticker : {row['Ticker']} \n"
+                    f"📰 {title} - {link}\n")
+               print(newsmessage)
+               
+        message += "\n"  # Separate each ticker nicely
+        newsmessage += "\n"
+    send_telegram_safe(message)
+    send_telegram_safe(newsmessage)
+    print("\n✅ Sent Telegram alert and saved watchlist.")
+   
+# ================= MORNING SCAN TOP MOVERS AND LOOSERS  END =================
 
 # ================= PREVIOUS DAY ANALYSIS =================
 def previous_day_analysis():
@@ -481,169 +619,9 @@ def previous_day_analysis():
         s = "🤖 AI Forecasts:\n" + "\n".join([f"{f['ticker']}: {f['trend']} {f['forecast']}" for f in ai_forecasts])
         send_message(s)
 
-# ================= LIVE TRADING LOOP (single-run job) =================
-def live_trading_loop(backtest_days=0):
-    """
-    Runs the live trading loop and optionally backtests the last N days.
-    
-    Parameters:
-        backtest_days (int): Number of previous days to simulate for backtesting.
-                             0 = live only.
-    """
-    now = datetime.now(EST)
-    log_message(f"🚀 Starting trading loop at {now.strftime('%Y-%m-%d %H:%M:%S')}")
-
-    if now.weekday() >= 5:
-        log_message("ℹ️ Weekend — skipping live trading.")
-        return
-
-    summary_messages = []
-
-    for ticker in tickers:
-        try:
-            # ================= BACKTEST =================
-            if backtest_days > 0:
-                log_message(f"🧪 Running backtest for {ticker} ({backtest_days} days)")
-                df_trades = backtest_ticker(
-                    ticker,
-                    start_date=(now - timedelta(days=backtest_days)).isoformat(),
-                    end_date=now.isoformat()
-                )
-                if df_trades is not None and not df_trades.empty:
-                    total_trades = len(df_trades)
-                    pnl_total = df_trades["pnl"].sum()
-                    win_rate = len(df_trades[df_trades["pnl"] > 0]) / total_trades * 100
-                    summary_messages.append(
-                        f"📊 Backtest {ticker}: Trades={total_trades}, "
-                        f"P&L=${pnl_total:.2f}, Win Rate={win_rate:.1f}%"
-                    )
-
-            # ================= LIVE DATA =================
-            log_message(f"🔍 Fetching live data for {ticker}...")
-            end = now
-            start = end - timedelta(hours=6)
-            bars = api.get_bars(
-                ticker, tradeapi.TimeFrame.Minute,
-                start=start.isoformat(), end=end.isoformat(), feed="iex"
-            ).df
-
-            if bars.empty:
-                log_message(f"⚠️ No market data for {ticker}")
-                continue
-
-            bars = safe_tz_localize_and_convert(bars)
-
-            # ================= FEATURE ENGINEERING =================
-            bars["SMA20"] = bars["close"].rolling(SMA_SHORT).mean()
-            bars["SMA50"] = bars["close"].rolling(SMA_LONG).mean()
-            bars["RSI"] = compute_rsi(bars["close"], 14)
-            bars["ATR"] = compute_atr(bars[["high", "low", "close"]], ATR_PERIOD)
-            macd, macd_signal = compute_macd(bars["close"])
-            adx_indicator = ADXIndicator(bars["high"], bars["low"], bars["close"], window=14)
-            adx = adx_indicator.adx().iloc[-1] if len(bars) >= 14 else np.nan
-
-            latest = bars.iloc[-1]
-            sma20, sma50 = bars["SMA20"].iloc[-1], bars["SMA50"].iloc[-1]
-            rsi, atr = bars["RSI"].iloc[-1], bars["ATR"].iloc[-1]
-            macd_latest, macd_signal_latest = macd.iloc[-1], macd_signal.iloc[-1]
-
-            # ================= AI FORECAST =================
-            forecast_result = deep_learning_forecast(ticker, bars, sheet if 'sheet' in globals() else None)
-            if forecast_result:
-                forecast_price = forecast_result["forecast"]
-                current_price = forecast_result["current"]
-                trend = forecast_result["trend"]
-                confidence = forecast_result["confidence"]
-            else:
-                forecast_price = current_price = trend = confidence = None
-
-            # ================= SIGNAL GENERATION =================
-            signal_reason = []
-            action = "HOLD"
-
-            if sma20 > sma50 and macd_latest > macd_signal_latest and rsi < 70 and adx > 20:
-                action = "BUY"
-                signal_reason.extend([
-                    "✅ SMA20 above SMA50 → bullish trend",
-                    "✅ MACD bullish crossover",
-                    f"✅ RSI healthy at {rsi:.1f}",
-                    f"✅ ADX {adx:.1f} indicates strong trend"
-                ])
-                if trend == "Up" and confidence >= 60:
-                    signal_reason.append(f"🤖 AI confirms upward momentum ({confidence}% confidence)")
-
-            elif sma20 < sma50 and macd_latest < macd_signal_latest and rsi > 30 and adx > 20:
-                action = "SELL"
-                signal_reason.extend([
-                    "❌ SMA20 below SMA50 → bearish trend",
-                    "❌ MACD bearish crossover",
-                    f"❌ RSI weakening at {rsi:.1f}",
-                    f"❌ ADX {adx:.1f} indicates strong downtrend"
-                ])
-                if trend == "Down" and confidence >= 60:
-                    signal_reason.append(f"🤖 AI confirms downward momentum ({confidence}% confidence)")
-            else:
-                action = "HOLD"
-                signal_reason.append("⚖️ Mixed or neutral signals — waiting for confirmation.")
-
-            # ================= TECHNICAL & FORECAST SUMMARY =================
-            technical_summary = (
-                f"• Close ${latest['close']:.2f} | SMA20 {sma20:.2f} / SMA50 {sma50:.2f}\n"
-                f"• RSI {rsi:.1f} | ATR {atr:.2f} | MACD {macd_latest:.2f}/{macd_signal_latest:.2f} | ADX {adx:.1f}"
-            )
-
-            forecast_summary = (
-                f"• AI Forecast: ${current_price:.2f} → ${forecast_price:.2f} ({trend}, {confidence}% confidence)"
-                if forecast_result else "• AI Forecast: N/A"
-            )
-
-            signal_summary = f"🔔 *Signal: {action}*\n" + "\n".join(f"→ {r}" for r in signal_reason)
-
-            ticker_msg = (
-                f"📊 *{ticker}*\n"
-                f"{technical_summary}\n"
-                f"{forecast_summary}\n\n"
-                f"{signal_summary}"
-            )
-
-            summary_messages.append(ticker_msg)
-            log_message(f"{ticker}: {action} — {', '.join(signal_reason)}")
-
-        except Exception as e:
-            log_message(f"❌ Error processing {ticker}: {e}")
-            continue
-
-    # ================= SEND SUMMARY TO TELEGRAM =================
-    if summary_messages:
-        msg = f"📈 *AI + Technical Live Scan & Backtest — {now.strftime('%b %d %H:%M')}*\n\n" + "\n\n".join(summary_messages)
-        send_message(msg)
-        log_message("📩 Sent consolidated summary to Telegram")
-    else:
-        log_message("ℹ️ No actionable signals this run.")
-
-    # ================= AUTO POSITION MANAGEMENT =================
-    try:
-        manage_positions()
-        log_message("✅ Position management complete")
-    except Exception as e:
-        log_message(f"⚠️ manage_positions failed: {e}")
-
 
 # -------------------- FULL INTEGRATION: REGIME / FEATURES / MODEL / RISK / EXEC --------------------
-import os
-import joblib
-import math
-import numpy as np
-import pandas as pd
-from datetime import datetime, timedelta
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
-from ta.trend import ADXIndicator
 
-# Config (override via environment)
-MODEL_DIR = os.getenv("MODEL_DIR", "models/sklearn")
-os.makedirs(MODEL_DIR, exist_ok=True)
 
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() in ("1", "true", "yes")
 RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "0.5"))  # percent of equity to risk
@@ -794,39 +772,6 @@ def load_model_if_exists(ticker):
         log_message(f"⚠️ Failed to load model {path}: {e}")
     return None
 
-# ---------------- Auto-train pipeline ----------------
-def auto_train_models():
-    """
-    Train models for all tickers using recent historical data and save them.
-    Intended to run nightly (GitHub Action or cron).
-    """
-    log_message("🧠 Starting auto_train_models pipeline...")
-    trained = 0
-    for ticker in tickers:
-        try:
-            # fetch historical minute bars for TRAIN_DAYS days; use daily if minute not available
-            end = datetime.now(EST)
-            start = end - timedelta(days=TRAIN_DAYS)
-            try:
-                bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute, start=start.isoformat(), end=end.isoformat(), feed="iex").df
-            except Exception:
-                bars = api.get_bars(ticker, tradeapi.TimeFrame.Day, limit=TRAIN_DAYS).df
-
-            if bars.empty or len(bars) < TRAIN_MIN_SAMPLES:
-                log_message(f"⚠️ Not enough data for training {ticker} (have {len(bars)} rows)")
-                continue
-
-            feat_df, full_df = create_features(bars)
-            labels = make_labels_for_direction(full_df, horizon=5, threshold=0.001)
-            model = train_and_save_model(ticker, feat_df, labels, force_retrain=True)
-            if model:
-                trained += 1
-        except Exception as e:
-            log_message(f"❌ auto_train_models failed for {ticker}: {e}")
-            continue
-
-    log_message(f"🏁 auto_train_models complete — models trained: {trained}/{len(tickers)}")
-
 # ---------------- Risk & Sizing ----------------
 def calculate_position_size(account_equity, risk_pct, entry_price, stop_price, max_shares=None):
     """
@@ -884,151 +829,179 @@ def execute_trade(action, symbol, qty, limit_price=None, client=None, dry_run=DR
         return result
 
 # ---------------- Upgraded live_trading_loop (user-friendly telegram messages) ----------------
-def live_trading_loop(backtest_days=0):
-    """
-    Runs the live trading loop and optionally backtests the last N days.
-    
-    Parameters:
-        backtest_days (int): Number of previous days to simulate for backtesting.
-                             0 = live only.
-    """
+def live_trading_loop():
+    log_message("🚀 Starting upgraded live_trading_loop (ensemble + user-friendly messages)")
     now = datetime.now(EST)
-    log_message(f"🚀 Starting trading loop at {now.strftime('%Y-%m-%d %H:%M:%S')}")
-
     if now.weekday() >= 5:
-        log_message("ℹ️ Weekend — skipping live trading.")
+        log_message("ℹ️ Weekend detected — skipping.")
         return
 
-    summary_messages = []
+    # attempt to get account equity
+    try:
+        acct = api.get_account()
+        equity = float(acct.equity)
+    except Exception:
+        equity = MIN_EQUITY_FOR_TRADING
 
+    summary_messages = []
     for ticker in tickers:
         try:
-            # ================= BACKTEST =================
-            if backtest_days > 0:
-                log_message(f"🧪 Running backtest for {ticker} ({backtest_days} days)")
-                df_trades = backtest_ticker(
-                    ticker,
-                    start_date=(now - timedelta(days=backtest_days)).isoformat(),
-                    end_date=now.isoformat()
-                )
-                if df_trades is not None and not df_trades.empty:
-                    total_trades = len(df_trades)
-                    pnl_total = df_trades["pnl"].sum()
-                    win_rate = len(df_trades[df_trades["pnl"] > 0]) / total_trades * 100
-                    summary_messages.append(
-                        f"📊 Backtest {ticker}: Trades={total_trades}, "
-                        f"P&L=${pnl_total:.2f}, Win Rate={win_rate:.1f}%"
-                    )
-
-            # ================= LIVE DATA =================
-            log_message(f"🔍 Fetching live data for {ticker}...")
-            end = now
+            log_message(f"🔍 Fetching bars for {ticker}...")
+            end = datetime.now(EST)
             start = end - timedelta(hours=6)
-            bars = api.get_bars(
-                ticker, tradeapi.TimeFrame.Minute,
-                start=start.isoformat(), end=end.isoformat(), feed="iex"
-            ).df
-
-            if bars.empty:
-                log_message(f"⚠️ No market data for {ticker}")
+            bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute, start=start.isoformat(), end=end.isoformat(), feed="iex").df
+            if bars.empty or len(bars) < 60:
+                log_message(f"⚠️ Insufficient bars for {ticker} (have {len(bars)})")
                 continue
 
-            bars = safe_tz_localize_and_convert(bars)
+            feat_df, full_df = create_features(bars)
+            # basic indicator snapshot
+            last = full_df.iloc[-1]
+            sma20 = float(full_df["SMA20"].iloc[-1]) if "SMA20" in full_df.columns else float("nan")
+            sma50 = float(full_df["SMA50"].iloc[-1]) if "SMA50" in full_df.columns else float("nan")
+            rsi = float(full_df["RSI"].iloc[-1]) if "RSI" in full_df.columns else float("nan")
+            atr = float(full_df["ATR"].iloc[-1]) if "ATR" in full_df.columns else float("nan")
+            macd_latest = float(full_df["MACD"].iloc[-1]) if "MACD" in full_df.columns else float("nan")
+            macd_signal_latest = float(full_df["MACD_SIGNAL"].iloc[-1]) if "MACD_SIGNAL" in full_df.columns else float("nan")
+            adx = float(full_df["ADX"].iloc[-1]) if "ADX" in full_df.columns and not pd.isna(full_df["ADX"].iloc[-1]) else float("nan")
 
-            # ================= FEATURE ENGINEERING =================
-            bars["SMA20"] = bars["close"].rolling(SMA_SHORT).mean()
-            bars["SMA50"] = bars["close"].rolling(SMA_LONG).mean()
-            bars["RSI"] = compute_rsi(bars["close"], 14)
-            bars["ATR"] = compute_atr(bars[["high", "low", "close"]], ATR_PERIOD)
-            macd, macd_signal = compute_macd(bars["close"])
-            adx_indicator = ADXIndicator(bars["high"], bars["low"], bars["close"], window=14)
-            adx = adx_indicator.adx().iloc[-1] if len(bars) >= 14 else np.nan
+            # regime
+            regime = detect_market_regime(bars)
 
-            latest = bars.iloc[-1]
-            sma20, sma50 = bars["SMA20"].iloc[-1], bars["SMA50"].iloc[-1]
-            rsi, atr = bars["RSI"].iloc[-1], bars["ATR"].iloc[-1]
-            macd_latest, macd_signal_latest = macd.iloc[-1], macd_signal.iloc[-1]
+            # model prediction
+            model = load_model_if_exists(ticker)
+            ai_signal = "Neutral"
+            ai_prob = 0.5
+            if model is not None and not feat_df.empty:
+                try:
+                    latest_feat = feat_df.iloc[[-1]].values
+                    pred_class = model.predict(latest_feat)[0]
+                    proba = model.predict_proba(latest_feat)[0]
+                    ai_signal = "Bullish" if pred_class == 1 else "Bearish"
+                    ai_prob = float(max(proba))
+                except Exception as e:
+                    log_message(f"⚠️ Model predict failed for {ticker}: {e}")
 
-            # ================= AI FORECAST =================
-            forecast_result = deep_learning_forecast(ticker, bars, sheet if 'sheet' in globals() else None)
-            if forecast_result:
-                forecast_price = forecast_result["forecast"]
-                current_price = forecast_result["current"]
-                trend = forecast_result["trend"]
-                confidence = forecast_result["confidence"]
+            # ensemble scoring (simple weighted blend)
+            # weights: SMA 0.25, MACD 0.2, RSI 0.15, ADX 0.1, Regime 0.1, AI 0.2
+            score = 0.0
+            reasons = []
+            # SMA
+            if not math.isnan(sma20) and not math.isnan(sma50):
+                if sma20 > sma50:
+                    score += 0.25; reasons.append("SMA20 > SMA50 (trend up)")
+                else:
+                    score -= 0.25; reasons.append("SMA20 < SMA50 (trend down)")
+            # MACD
+            if not math.isnan(macd_latest) and not math.isnan(macd_signal_latest):
+                if macd_latest > macd_signal_latest:
+                    score += 0.20; reasons.append("MACD positive (momentum up)")
+                else:
+                    score -= 0.20; reasons.append("MACD negative (momentum down)")
+            # RSI
+            if not math.isnan(rsi):
+                if rsi < 40:
+                    score += 0.15; reasons.append(f"RSI {rsi:.1f} (oversold bias)")
+                elif rsi > 60:
+                    score -= 0.15; reasons.append(f"RSI {rsi:.1f} (overbought caution)")
+                else:
+                    reasons.append(f"RSI {rsi:.1f} (neutral)")
+            # ADX
+            if not math.isnan(adx) and adx > 25:
+                score *= 1.05; reasons.append(f"ADX {adx:.1f} (trend strong)")
+            # regime
+            if regime and isinstance(regime, dict):
+                if regime["type"].lower().startswith("bull"):
+                    score += 0.10; reasons.append("Market regime bullish")
+                elif regime["type"].lower().startswith("bear"):
+                    score -= 0.10; reasons.append("Market regime bearish")
+            # AI
+            if ai_signal == "Bullish":
+                score += ai_prob * 0.20; reasons.append(f"AI bullish ({ai_prob*100:.1f}%)")
+            elif ai_signal == "Bearish":
+                score -= ai_prob * 0.20; reasons.append(f"AI bearish ({ai_prob*100:.1f}%)")
             else:
-                forecast_price = current_price = trend = confidence = None
+                reasons.append("AI neutral")
 
-            # ================= SIGNAL GENERATION =================
-            signal_reason = []
-            action = "HOLD"
+            # normalize to confidence 0..1
+            confidence = min(abs(score), 1.0)
 
-            if sma20 > sma50 and macd_latest > macd_signal_latest and rsi < 70 and adx > 20:
+            # thresholds
+            if score > 0.25:
                 action = "BUY"
-                signal_reason.extend([
-                    "✅ SMA20 above SMA50 → bullish trend",
-                    "✅ MACD bullish crossover",
-                    f"✅ RSI healthy at {rsi:.1f}",
-                    f"✅ ADX {adx:.1f} indicates strong trend"
-                ])
-                if trend == "Up" and confidence >= 60:
-                    signal_reason.append(f"🤖 AI confirms upward momentum ({confidence}% confidence)")
-
-            elif sma20 < sma50 and macd_latest < macd_signal_latest and rsi > 30 and adx > 20:
+            elif score < -0.25:
                 action = "SELL"
-                signal_reason.extend([
-                    "❌ SMA20 below SMA50 → bearish trend",
-                    "❌ MACD bearish crossover",
-                    f"❌ RSI weakening at {rsi:.1f}",
-                    f"❌ ADX {adx:.1f} indicates strong downtrend"
-                ])
-                if trend == "Down" and confidence >= 60:
-                    signal_reason.append(f"🤖 AI confirms downward momentum ({confidence}% confidence)")
             else:
                 action = "HOLD"
-                signal_reason.append("⚖️ Mixed or neutral signals — waiting for confirmation.")
 
-            # ================= TECHNICAL & FORECAST SUMMARY =================
-            technical_summary = (
-                f"• Close ${latest['close']:.2f} | SMA20 {sma20:.2f} / SMA50 {sma50:.2f}\n"
-                f"• RSI {rsi:.1f} | ATR {atr:.2f} | MACD {macd_latest:.2f}/{macd_signal_latest:.2f} | ADX {adx:.1f}"
+            # compute stop / tp using ATR
+            stop_price = None
+            take_profit = None
+            if not math.isnan(atr) and atr > 0:
+                if action == "BUY":
+                    stop_price = last["close"] - 1.5 * atr
+                    take_profit = last["close"] + 3.0 * atr
+                elif action == "SELL":
+                    stop_price = last["close"] + 1.5 * atr
+                    take_profit = last["close"] - 3.0 * atr
+
+            # sizing
+            qty = 0
+            if action in ("BUY", "SELL") and stop_price is not None:
+                qty = calculate_position_size(equity, RISK_PER_TRADE_PCT, float(last["close"]), float(stop_price), max_shares=MAX_SHARES_PER_TRADE)
+
+            # Execution (dry-run by default)
+            exec_result = {"status": "skipped"}
+            if action in ("BUY", "SELL") and qty > 0:
+                exec_result = execute_trade(action, ticker, qty, limit_price=None, dry_run=DRY_RUN)
+
+            # Format message
+            pos_text = "No position"
+            try:
+                positions = {p.symbol: p for p in api.list_positions()}  # may raise
+                pos_text = f"{positions[ticker].qty} @ avg ${float(positions[ticker].avg_entry_price):.2f}" if ticker in positions else "No position"
+            except Exception:
+                pos_text = "Unknown"
+
+            forecast_result = deep_learning_forecast(ticker, bars, sheet if 'sheet' in globals() else None)
+            trend = forecast_result.get("trend", "N/A") if forecast_result else "N/A"
+            forecast_conf = forecast_result.get("confidence", 0) if forecast_result else 0
+
+            signal, reasons = interpret_signals(
+                ticker, sma20, sma50, rsi, macd_latest, macd_signal_latest, adx, trend, forecast_conf
             )
 
-            forecast_summary = (
-                f"• AI Forecast: ${current_price:.2f} → ${forecast_price:.2f} ({trend}, {confidence}% confidence)"
-                if forecast_result else "• AI Forecast: N/A"
-            )
+            reasons_text = "\n".join(f"   • {r}" for r in reasons)
 
-            signal_summary = f"🔔 *Signal: {action}*\n" + "\n".join(f"→ {r}" for r in signal_reason)
-
-            ticker_msg = (
+            message = (
                 f"📊 *{ticker}*\n"
-                f"{technical_summary}\n"
-                f"{forecast_summary}\n\n"
-                f"{signal_summary}"
+                f"• Price: ${float(last['close']):.2f} | SMA20 {sma20:.2f} / SMA50 {sma50:.2f}\n"
+                f"• RSI: {rsi:.1f} | ATR: {atr:.2f} | MACD: {macd_latest:.3f}/{macd_signal_latest:.3f} | ADX: {'' if math.isnan(adx) else f'{adx:.1f}'}\n"
+                f"• Regime: {regime.get('type', 'N/A')} ({regime.get('confidence', 0.0):.1f}%)\n"
+                f"• AI: {ai_signal} ({ai_prob*100:.1f}%)\n\n"
+                f"🔔 *Decision: {action}*  — Confidence {confidence*100:.0f}%\n"
+                f"• Qty (suggested): {qty}\n"
+                f"• Stop: {'' if stop_price is None else f'${stop_price:.2f}'} | TP: {'' if take_profit is None else f'${take_profit:.2f}'}\n"
+                f"• Exec status: {exec_result.get('status')}\n"
+                f"• Current Position: {pos_text}\n\n"
+                f"🧠 *Rationale:*\n" + "\n".join(f"→ {r}" for r in reasons) + "\n\n"
+                f"⏱️ {datetime.now(EST).strftime('%Y-%m-%d %H:%M:%S')} (EST)\n\n"
+                f"🧠 *Reasoning:*\n{reasons_text}"
             )
 
-            summary_messages.append(ticker_msg)
-            log_message(f"{ticker}: {action} — {', '.join(signal_reason)}")
+            summary_messages.append(message)
+            log_message(f"{ticker} => action={action} confidence={confidence:.2f} qty={qty} exec={exec_result.get('status')}")
 
         except Exception as e:
             log_message(f"❌ Error processing {ticker}: {e}")
             continue
 
-    # ================= SEND SUMMARY TO TELEGRAM =================
     if summary_messages:
-        msg = f"📈 *AI + Technical Live Scan & Backtest — {now.strftime('%b %d %H:%M')}*\n\n" + "\n\n".join(summary_messages)
-        send_message(msg)
-        log_message("📩 Sent consolidated summary to Telegram")
+        header = f"📈 *Live Scan — {datetime.now(EST).strftime('%b %d %H:%M')}*\n\n"
+        send_message(header + "\n\n".join(summary_messages))
+        log_message("📩 Sent live scan to Telegram")
     else:
-        log_message("ℹ️ No actionable signals this run.")
-
-    # ================= AUTO POSITION MANAGEMENT =================
-    try:
-        manage_positions()
-        log_message("✅ Position management complete")
-    except Exception as e:
-        log_message(f"⚠️ manage_positions failed: {e}")
+        log_message("ℹ️ No summary messages to send this run")
 
 
 
@@ -1079,7 +1052,206 @@ def interpret_signals(ticker, sma20, sma50, rsi, macd, macd_signal, adx, trend, 
 
     return signal, explanations
 
+#============Back testing Logic===================
 
+def backtest_strategy_with_report():
+    """
+    Backtests the ensemble + AI trading logic over historical data and sends
+    a detailed performance report + chart to Telegram.
+    """
+    end_date = datetime.now(EST)
+    start_date = end_date - timedelta(days=7)  # last 7 days default
+    log_message(f"🧩 Starting backtest from {start_date} to {end_date} for {len(tickers)} tickers")
+
+    results = []
+    trades = []
+    equity_curves = {}
+
+    for ticker in tickers:
+        log_message(f"📜 Backtesting {ticker} ...")
+        try:
+            bars = api.get_bars(
+                ticker,
+                tradeapi.TimeFrame.Minute,
+                start=pd.Timestamp(start_date).isoformat(),
+                end=pd.Timestamp(end_date).isoformat(),
+                feed="iex"
+            ).df
+
+            if bars.empty or len(bars) < 100:
+                log_message(f"⚠️ Not enough data for {ticker}")
+                continue
+
+            feat_df, full_df = create_features(bars)
+            if full_df.empty:
+                continue
+
+            model = load_model_if_exists(ticker)
+
+            equity = INITIAL_CAPITAL
+            equity_curve = [equity]
+            position = 0
+            entry_price = 0
+            qty = 0
+            pnl_list = []
+
+            for i in range(60, len(full_df)):
+                current = full_df.iloc[:i].copy()
+                last = current.iloc[-1]
+
+                sma20 = last.get("SMA20", np.nan)
+                sma50 = last.get("SMA50", np.nan)
+                rsi = last.get("RSI", np.nan)
+                atr = last.get("ATR", np.nan)
+                macd = last.get("MACD", np.nan)
+                macd_signal = last.get("MACD_SIGNAL", np.nan)
+                adx = last.get("ADX", np.nan)
+                regime = detect_market_regime(current)
+
+                ai_signal = "Neutral"
+                ai_prob = 0.5
+                if model is not None and not feat_df.empty:
+                    latest_feat = feat_df.iloc[[i - 1]].values
+                    pred_class = model.predict(latest_feat)[0]
+                    if hasattr(model, "predict_proba"):
+                        proba = model.predict_proba(latest_feat)[0]
+                        ai_prob = float(max(proba))
+                    ai_signal = "Bullish" if pred_class == 1 else "Bearish"
+
+                # ===== Ensemble Logic =====
+                score = 0.0
+                if not math.isnan(sma20) and not math.isnan(sma50):
+                    score += 0.25 if sma20 > sma50 else -0.25
+                if not math.isnan(macd) and not math.isnan(macd_signal):
+                    score += 0.20 if macd > macd_signal else -0.20
+                if not math.isnan(rsi):
+                    if rsi < 40: score += 0.15
+                    elif rsi > 60: score -= 0.15
+                if not math.isnan(adx) and adx > 25:
+                    score *= 1.05
+                if regime and isinstance(regime, dict):
+                    if regime["type"].lower().startswith("bull"):
+                        score += 0.10
+                    elif regime["type"].lower().startswith("bear"):
+                        score -= 0.10
+                if ai_signal == "Bullish":
+                    score += ai_prob * 0.20
+                elif ai_signal == "Bearish":
+                    score -= ai_prob * 0.20
+
+                # ===== Action =====
+                if score > 0.25:
+                    action = "BUY"
+                elif score < -0.25:
+                    action = "SELL"
+                else:
+                    action = "HOLD"
+
+                close = last["close"]
+                if not math.isnan(atr) and atr > 0:
+                    stop = close - 1.5 * atr if action == "BUY" else close + 1.5 * atr
+                    tp = close + 3.0 * atr if action == "BUY" else close - 3.0 * atr
+                else:
+                    stop, tp = None, None
+
+                # ===== Simulate =====
+                if position == 0 and action in ("BUY", "SELL"):
+                    position = 1 if action == "BUY" else -1
+                    entry_price = close
+                    risk = 0.01
+                    trade_size = equity * risk / (atr * 1.5 if atr > 0 else 1)
+                    trade_size = min(trade_size, 1000)
+                    qty = max(1, int(trade_size / close))
+                    trades.append({
+                        "ticker": ticker,
+                        "entry_time": current.index[-1],
+                        "entry_price": entry_price,
+                        "action": action,
+                        "qty": qty
+                    })
+                elif position != 0:
+                    if stop and tp:
+                        if (position == 1 and (close <= stop or close >= tp)) or \
+                           (position == -1 and (close >= stop or close <= tp)):
+                            exit_price = close
+                            pnl = (exit_price - entry_price) * position * qty
+                            equity += pnl
+                            pnl_list.append(pnl)
+                            trades[-1].update({
+                                "exit_time": current.index[-1],
+                                "exit_price": exit_price,
+                                "pnl": pnl
+                            })
+                            position = 0
+                equity_curve.append(equity)
+
+            equity_curves[ticker] = equity_curve
+
+            # ===== Metrics =====
+            total_pnl = sum(pnl_list)
+            win_rate = np.mean([1 if t.get("pnl", 0) > 0 else 0 for t in trades[-len(pnl_list):]]) if pnl_list else 0
+            returns = pd.Series(equity_curve).pct_change().fillna(0)
+            sharpe = np.mean(returns) / (np.std(returns) + 1e-9) * np.sqrt(252 * 6.5 * 60)
+            max_dd = (1 - np.min(pd.Series(equity_curve) / np.maximum.accumulate(equity_curve))) * 100
+
+            results.append({
+                "Ticker": ticker,
+                "Total PnL": round(total_pnl, 2),
+                "Win Rate": round(win_rate * 100, 2),
+                "Sharpe": round(sharpe, 2),
+                "Max Drawdown %": round(max_dd, 2),
+                "Final Equity": round(equity, 2)
+            })
+
+        except Exception as e:
+            log_message(f"❌ Backtest error for {ticker}: {e}")
+            continue
+
+    df = pd.DataFrame(results)
+    log_message("📊 Backtest complete.")
+    if df.empty:
+        send_message("⚠️ No backtest results to report.")
+        return df
+
+    # ===== Plot Equity Curves =====
+    plt.figure(figsize=(10, 5))
+    for ticker, curve in equity_curves.items():
+        plt.plot(curve, label=ticker)
+    plt.title(f"Equity Curves ({start_date} → {end_date})")
+    plt.xlabel("Trades")
+    plt.ylabel("Equity ($)")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    plt.close()
+
+    # ===== Format Telegram Message =====
+    summary = f"📈 *Backtest Report* ({start_date} → {end_date})\n\n"
+    for _, row in df.iterrows():
+        summary += (
+            f"💠 *{row['Ticker']}*\n"
+            f"• PnL: ${row['Total PnL']:,}\n"
+            f"• Win Rate: {row['Win Rate']}%\n"
+            f"• Sharpe: {row['Sharpe']}\n"
+            f"• Max DD: {row['Max Drawdown %']}%\n"
+            f"• Final Equity: ${row['Final Equity']:,}\n\n"
+        )
+
+    # ===== Send to Telegram =====
+    send_message(summary)
+    send_photo(buf)
+
+    log_message("📩 Backtest report + chart sent to Telegram.")
+    return df
+
+def send_photo(image_buf):
+    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
+                  data={"chat_id": TELEGRAM_CHAT_ID},
+                  files={"photo": ("chart.png", image_buf)})
 # ================= MORNING SCAN =================
 def morning_scan():
     log_message("🌅 Starting Morning Scan")
@@ -1088,8 +1260,9 @@ def morning_scan():
     for ticker in tickers:
         try:
             end_dt = datetime.now(EST)
-            start_dt = end_dt - timedelta(days=5)
+            start_dt = end_dt - timedelta(days=10)
             bars = api.get_bars(ticker, tradeapi.TimeFrame.Minute, start=start_dt.isoformat(), end=end_dt.isoformat(), feed="iex").df
+           
             if bars.empty or len(bars) < 20:
                 log_message(f"⚠️ Not enough data for {ticker}")
                 continue
@@ -1133,7 +1306,7 @@ def morning_scan():
         msg = "🤖 *AI Forecasts Summary — Morning Scan*\n\n"
         for f in ai_forecasts:
             reason = "Predicted ↑" if f['trend']=="BULLISH" else "Predicted ↓"
-            msg += f"{f['ticker']}: Current {f['current']:.2f} | Predicted {f['forecast']:.2f} | {f['trend']} | {reason} | Conf {f['confidence']}%\n"
+            msg += f"{f['ticker']}: Current {f['current']:.2f} | Predicted {f['forecast']:.2f} | {f['trend']} | {reason} | Conf {f['confidence']}%\n"+"\n"
         send_message(msg)
 
     if not potential:
@@ -1156,60 +1329,30 @@ def morning_scan():
     except Exception as e:
         log_message(f"⚠️ Write to sheet failed: {e}")
 
-    msg = "🌅 *Morning Scanner — Potential Stocks for Today*\n\n"
+    message = "🌅 *Morning Scanner — Potential Stocks for Today*\n\n"
     for _, r in top10.iterrows():
         msg += f"{r['Ticker']}: {r['Direction']} | Price: {r['Price']} | RSI: {r['RSI']} | ADX: {r['ADX']} | Vol x{r['VolSpike']} | SMA Gap: {r['SMA_Gap%']}%\n"
+    
     send_message(msg)
     log_message("✅ Morning scan completed")
 
 
-def auto_train_models():
-    import joblib, os
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.model_selection import train_test_split
-
-    os.makedirs("models/sklearn", exist_ok=True)
-    log_message("🚀 Starting nightly auto-train pipeline...")
-
-    for ticker in tickers:
-        try:
-            bars = api.get_bars(ticker, tradeapi.TimeFrame.Day, limit=200).df
-            if bars.empty:
-                continue
-
-            features, target = create_features(bars)
-            X_train, X_test, y_train, y_test = train_test_split(features, target, test_size=0.2, shuffle=False)
-
-            model = RandomForestClassifier(n_estimators=100, random_state=42)
-            model.fit(X_train, y_train)
-            score = model.score(X_test, y_test)
-
-            joblib.dump(model, f"models/sklearn/{ticker}_model.pkl")
-            log_message(f"✅ {ticker} model trained & saved (Accuracy: {score:.2f})")
-
-        except Exception as e:
-            log_message(f"❌ Error training model for {ticker}: {e}")
-
-
-def retrain_all_models():
-    log_message("🔁 Running full model retrain (weekly refresh)...")
-    auto_train_models()
-    log_message("🏁 Weekly retrain complete.")
 
 
 if __name__ == "__main__":
-    import sys
+
     if len(sys.argv) < 2:
         print("Usage: python moving_average_bot.py [morning|analysis|live|backtest|auto_train]")
         sys.exit(1)
     mode = sys.argv[1]
     if mode == "morning":
-        live_trading_loop()
+        get_top_gap_gainers()
+        morning_scan()
     elif mode == "analysis":
         previous_day_analysis()
     elif mode == "live":
         live_trading_loop()
     elif mode == "backtest":
-        backtest()
+       backtest_strategy_with_report()
     elif mode == "auto_train":
-        auto_train_models()
+       live_trading_loop()
