@@ -1392,14 +1392,12 @@ if __name__ == "__main__":
         sys.exit(1)
     mode = sys.argv[1]
     if mode == "morning":
-        auto_train_models(retrain=False)  # retrain=True to force training
         get_top_gap_gainers()
         morning_scan()
     elif mode == "analysis":
         previous_day_analysis()
     elif mode == "live":      
         live_trading_loop()
-        backtest_strategy_with_report()
     elif mode == "backtest":
        auto_train_models(retrain=False)
        backtest_strategy_with_report()
