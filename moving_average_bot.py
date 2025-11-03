@@ -1656,7 +1656,7 @@ def live_trading_loop():
         'Score_threshold': 0.05,
         'Cooldown_minutes': 15
     }
-
+    print("KEY:", os.getenv("APCA_API_KEY_ID"))
     for ticker in tickers:
         last_bar, bars = fetch_last_bar(ticker)
         if last_bar is None:
