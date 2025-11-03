@@ -693,18 +693,19 @@ def update_morning_scanner_with_ai(top_n=5):
     if df is None or df.empty:
         print("⚠️ No top gainers found today.")
         return
-
+    
     potential = []
     ai_forecasts = []
 
     for _, row in df.iterrows():
         ticker = row['Ticker']
+        close = row['Price']
         try:
             # Fetch last 10 days bars
             end_dt = datetime.now(EST)
-            start_dt = end_dt - timedelta(days=10)
+            start_dt = end_dt - timedelta(days=80)
             bars = api.get_bars(
-                ticker, tradeapi.TimeFrame.Minute,
+                ticker, tradeapi.TimeFrame(5, tradeapi.TimeFrameUnit.Minute),
                 start=start_dt.isoformat(), end=end_dt.isoformat(),
                 feed="iex"
             ).df
@@ -713,16 +714,17 @@ def update_morning_scanner_with_ai(top_n=5):
                 continue
 
             bars = safe_tz_localize_and_convert(bars)
-            bars = prepare_indicators(bars)  # precompute SMA, RSI, ATR, etc.
-
-            prev = bars.iloc[-2]
-            curr = bars.iloc[-1]
-
+            feat_df, df = create_features(bars)  # precompute SMA, RSI, ATR, etc.
+             # ✅ check existence of indicators
+            
+            prev = feat_df.iloc[-2]
+            curr = feat_df.iloc[-1]
+            
             # Technical signals
             sma_gap = abs((curr["SMA20"] - curr["SMA50"]) / (curr["SMA50"] or 1)) * 100
             rsi = round(curr["RSI"], 1)
             adx = round(curr.get("ADX", 0), 1)
-            vol_ratio = curr["volume"] / (curr.get("AvgVol", 1) or 1)
+            vol_ratio = curr["VOL_RATIO"]
             bullish_ready = prev["SMA20"] <= prev["SMA50"] and curr["SMA20"] > curr["SMA50"]
             bearish_ready = prev["SMA20"] >= prev["SMA50"] and curr["SMA20"] < curr["SMA50"]
             direction = "BULLISH" if bullish_ready else "BEARISH" if bearish_ready else "NEUTRAL"
@@ -732,16 +734,16 @@ def update_morning_scanner_with_ai(top_n=5):
             if len(bars) >= 60:  # require sufficient bars
                 ai_signal, ai_conf = ai_predict(bars, ticker, lookback=60)
                 if ai_signal:
-                    ai_forecasts.append({"ticker": ticker, "trend": ai_signal, "confidence": ai_conf, "current": curr["close"]})
+                    ai_forecasts.append({"ticker": ticker, "trend": ai_signal, "confidence": ai_conf, "current": close})
                     direction += f" | AI:{ai_signal}"
                     score += ai_conf / 20  # scale confidence to score
-
-            if direction != "NEUTRAL":
-                potential.append([
-                    ticker, direction, round(curr["close"], 2),
-                    rsi, adx, round(vol_ratio, 2),
-                    round(sma_gap, 2), round(score, 2)
-                ])
+            print(f"AI Score {score}   direction {direction}")
+            
+            potential.append([
+                ticker, direction, round(close, 2),
+                rsi, adx, round(vol_ratio, 2),
+                round(sma_gap, 2), round(score, 2)
+            ])
 
         except Exception as e:
             log_message(f"⚠️ Analysis failed for {ticker}: {e}")
@@ -766,7 +768,7 @@ def update_morning_scanner_with_ai(top_n=5):
         log_message(f"⚠️ Failed to update Morning_Scanner: {e}")
 
     # Step 4: Send Telegram Alerts
-    msg = "<b>📊 Morning Scanner — Top Gainers with AI Forecast</b>\n\n"
+    msg = "📊 Morning Scanner — Top Gainers with AI Forecast\n\n"
     for _, r in df_potential.iterrows():
         msg += (f"🔹 {r['Ticker']} | {r['Direction']} | Price: {r['Price']}\n"
                 f"RSI: {r['RSI']} | ADX: {r['ADX']} | Vol x{r['VolSpike']} | SMA Gap: {r['SMA_Gap%']}% | Score: {r['Score']}\n\n")
