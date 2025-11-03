@@ -83,7 +83,7 @@ SMA_LONG = int(os.getenv("SMA_LONG", "50"))
 ATR_PERIOD = int(os.getenv("ATR_PERIOD", "14"))
 ATR_MULTIPLIER = float(os.getenv("ATR_MULTIPLIER", "1"))
 SIGNAL_EXPIRY_DAYS = int(os.getenv("SIGNAL_EXPIRY_DAYS", "5"))
-
+print("KEY:", os.getenv("APCA_API_KEY_ID"))
 LOG_DIR = "logs"
 SIGNAL_DIR = "signals"
 MODEL_DIR = "models"
