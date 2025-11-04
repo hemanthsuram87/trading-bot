@@ -60,7 +60,7 @@ jobs:
         run: python moving_average_bot.py analysis
 
       - name: Live Trading
-        if: github.event_name == 'schedule' && startsWith(github.event.schedule, '*/10')
+        if: github.event_name == 'schedule' && startsWith(github.event.schedule, '*/10') || github.event_name == 'workflow_dispatch'
         env:
           ALPACA_KEY: ${{secrets.ALPACA_KEY}}
           ALPACA_SECRET: ${{secrets.ALPACA_SECRET}}
