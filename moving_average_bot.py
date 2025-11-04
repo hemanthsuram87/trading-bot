@@ -89,11 +89,6 @@ LOG_DIR = "logs"
 SIGNAL_DIR = "signals"
 MODEL_DIR = "models"
 
-os.makedirs(LOG_DIR, exist_ok=True)
-os.makedirs(SIGNAL_DIR, exist_ok=True)
-os.makedirs(MODEL_DIR, exist_ok=True)
-
-# logging
 EST = pytz.timezone("US/Eastern")
 
 # Auto close settings
@@ -110,21 +105,6 @@ MODEL_DIR = "models"
 INITIAL_CAPITAL = 10000
 COMMISSION = 0.001  # 0.1%
 
-
-# ====== Best filter parameters for backtesting ======
-BEST_FILTERS_BACKTEST = {
-    'SMA_score': 0.1,
-    'RSI_oversold': 40,
-    'RSI_overbought': 60,
-    'RSI_score': 0.05,
-    'ATR_threshold': 0.0,       # allow all trades
-    'STOP_ATR_MULT': 1.0,
-    'TP_ATR_MULT': 1.0,
-    'AI_score': 0.1,
-    'Score_threshold': 0.0,     # allow all signals
-    'Volume_filter': False,
-    'Risk': 0.01
-}
 
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(SIGNAL_DIR, exist_ok=True)
@@ -149,7 +129,14 @@ if os.path.exists("google_creds.json"):
         client = gspread.authorize(creds)
         sheet = client.open("Daily_stocks")
         tickers_ws = sheet.worksheet("Tickers")
+       # tickers_ms = sheet.worksheet("Morning_Scanner")
         tickers = tickers_ws.col_values(1)
+        
+        # ✅ Get all rows from "Morning_Scanner"
+       # rows = tickers_ms.get_all_records()
+
+        # ✅ Extract only ticker symbols (first column)
+        #tickers = [row["Ticker"] for row in rows if row.get("Ticker")]
     except Exception as e:
         log_message(f"⚠️ Google Sheets init failed: {e}")
         tickers = []
@@ -159,49 +146,6 @@ else:
 
 # Signals persistence (single file)
 SIGNAL_FILE = os.path.join(SIGNAL_DIR, "sent_signals_master.txt")
-
-def parse_signal_date(signal_id):
-    try:
-        # Format: TICKER-BUY-YYYY-MM-DD HH:MM:SS
-        # rsplit safe in case ticker contains dashes
-        timestamp_str = signal_id.rsplit("-", 1)[-1]
-        return datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return None
-
-def cleanup_old_signals(signals):
-    now = datetime.now()
-    valid = set()
-    for s in signals:
-        d = parse_signal_date(s)
-        if d is None:
-            valid.add(s)
-        elif now - d <= timedelta(days=SIGNAL_EXPIRY_DAYS):
-            valid.add(s)
-    return valid
-
-def load_sent_signals():
-    if not os.path.exists(SIGNAL_FILE):
-        return set()
-    with open(SIGNAL_FILE, "r") as f:
-        signals = set(line.strip() for line in f if line.strip())
-    cleaned = cleanup_old_signals(signals)
-    if cleaned != signals:
-        save_all_signals(cleaned)
-    return cleaned
-
-def save_sent_signal(signal_id):
-    os.makedirs(os.path.dirname(SIGNAL_FILE), exist_ok=True)
-    with open(SIGNAL_FILE, "a") as f:
-        f.write(signal_id + "\n")
-
-def save_all_signals(signals):
-    os.makedirs(os.path.dirname(SIGNAL_FILE), exist_ok=True)
-    with open(SIGNAL_FILE, "w") as f:
-        for s in sorted(signals):
-            f.write(s + "\n")
-
-sent_signals = load_sent_signals()
 
 # ================= UTILITIES =================
 def safe_tz_localize_and_convert(df):
@@ -284,9 +228,6 @@ def log_trade(trade: dict):
         'Signal': 'LONG'/'SHORT',
         'Entry': float,
         'Exit': float,
-        'PnL': float,
-        'Qty': int,
-        'Equity': float
     }
     """
     # --- Google Sheets ---
@@ -297,30 +238,21 @@ def log_trade(trade: dict):
             trades_ws = sheet.add_worksheet(title="ExecutedTrades", rows="1000", cols="20")
             trades_ws.append_row(list(trade.keys()))
         trades_ws.append_row([trade[k] if k in trade else "" for k in trades_ws.row_values(1)])
-    else:
-        # --- Excel fallback ---
-        file_path = "executed_trades.xlsx"
-        df = pd.DataFrame([trade])
-        if os.path.exists(file_path):
-            df_existing = pd.read_excel(file_path)
-            df = pd.concat([df_existing, df], ignore_index=True)
-        df.to_excel(file_path, index=False)
 
 
-
-def init_equity(sheet_client, tickers, default_equity=1000):
+def init_equity( tickers, default_equity=1000):
     """
     Initialize equity per ticker from Google Sheet or create missing tickers.
     Only adds tickers that are not already present.
     Returns a dict: {ticker: equity_value}
     """
     equity = {}
-    if sheet_client:
+    if sheet:
         # Try to open the worksheet
         try:
-            ws = sheet_client.worksheet("TickerEquity")
+            ws = sheet.worksheet("TickerEquity")
         except gspread.WorksheetNotFound:
-            ws = sheet_client.add_worksheet(title="TickerEquity", rows="100", cols="5")
+            ws = sheet.add_worksheet(title="TickerEquity", rows="100", cols="5")
             ws.append_row(["Ticker", "Equity", "LastUpdate"])
 
         # Fetch existing tickers
@@ -353,34 +285,25 @@ def init_equity(sheet_client, tickers, default_equity=1000):
 
     return equity
 
-def update_equity_sheet(ticker, equity_value):
+SHEET_START = "Equity_Start"
+SHEET_END = "Equity_End"
+
+def load_equity_snapshots():
+    """
+    Loads start and end equity snapshots from Google Sheets.
+    Returns (start_equity, end_equity)
+    """
     if sheet:
+        # Try to open the worksheet
         try:
             ws = sheet.worksheet("TickerEquity")
-            cell = ws.find(ticker)
-            if cell:
-                ws.update_cell(cell.row, 2, round(equity_value, 2))
-                ws.update_cell(cell.row, 3, datetime.now().isoformat())
-        except Exception as e:
-            print(f"⚠️ Update equity failed for {ticker}: {e}")
-    else:
-        # Excel fallback
-        file_path = "equity.xlsx"
-        if os.path.exists(file_path):
-            df = pd.read_excel(file_path)
-        else:
-            df = pd.DataFrame(columns=["Ticker","Equity","LastUpdate"])
-        if ticker in df['Ticker'].values:
-            df.loc[df['Ticker']==ticker,'Equity'] = equity_value
-            df.loc[df['Ticker']==ticker,'LastUpdate'] = datetime.now()
-        else:
-            df = pd.concat([df, pd.DataFrame([{"Ticker":ticker,"Equity":equity_value,"LastUpdate":datetime.now()}])], ignore_index=True)
-        df.to_excel(file_path, index=False)
+        except gspread.WorksheetNotFound:
+            ws = sheet.add_worksheet(title="TickerEquity", rows="100", cols="5")
+            ws.append_row(["Ticker", "Equity", "LastUpdate"])
 
-# =======================
-# Initialize global equity
-# =======================
-equity = init_equity(sheet, tickers, default_equity=1000)
+        # Fetch existing tickers
+        existing_records = ws.get_all_records()
+    return existing_records
 
 
 # ================= INDICATORS =================
@@ -513,22 +436,47 @@ def deep_learning_forecast(ticker, bars, sheet=None, lookback=60, forecast_steps
 
 
 # ===================== HELPERS =====================
-def fetch_last_bar(ticker, limit=60, timeframe='1Min'):
+def fetch_last_bar(ticker, limit=120, timeframe='1Min'):
+    """
+    Fetch the most recent valid (non-NaN) bar for the given ticker.
+    Falls back to earlier bars if the last one is incomplete.
+    """
     end_dt = datetime.now(EST)
     start_dt = end_dt - timedelta(minutes=limit)
-    bars = api.get_bars(
-        ticker,
-        tradeapi.TimeFrame.Minute,
-        start=start_dt.isoformat(),
-        end=end_dt.isoformat(),
-        limit=limit,
-        adjustment='raw',
-        feed='iex'
-    ).df
-    if not bars.empty:
-        bars = prepare_indicators(bars)  # Precompute indicators
-        return bars.iloc[-1], bars
-    return None, pd.DataFrame()
+
+    ticker = ticker.strip().upper()
+    print(f"📊 Fetching bars for {ticker} from {start_dt:%Y-%m-%d %H:%M} to {end_dt:%Y-%m-%d %H:%M}")
+
+    try:
+        bars = api.get_bars(
+            ticker,
+            tradeapi.TimeFrame.Minute,
+            start=start_dt.isoformat(),
+            end=end_dt.isoformat(),
+            feed='iex'  # more reliable than 'iex' for paper/live
+        ).df
+
+        if bars.empty:
+            print(f"⚠️ No bars returned for {ticker}")
+            return None, pd.DataFrame()
+
+        bars = prepare_indicators(bars)
+        # Drop rows that have NaN indicators (incomplete or insufficient history)
+        valid_bars = bars.dropna(subset=['SMA_short', 'SMA_long', 'ATR', 'RSI'])
+
+        if valid_bars.empty and limit < 300:
+            print(f"🔁 Retrying {ticker} with extended range...")
+            return fetch_last_bar(ticker, limit=300)
+
+        # ✅ Use the last valid completed bar instead of the very last row
+        last_bar = valid_bars.iloc[-1]
+        print(f"✅ Using last valid bar for {ticker}: {last_bar.name} Close={last_bar['close']:.2f}")
+        return last_bar, bars
+
+    except Exception as e:
+        print(f"⚠️ Error fetching bars for {ticker}: {e}")
+        return None, pd.DataFrame()
+
 
 # ================================
 # Prepare indicators
@@ -610,10 +558,6 @@ def escape_text(text):
         return ""
     return html.escape(str(text), quote=False)
 
-def safe_text(text):
-    if not text:
-        return ""
-    return html.escape(str(text), quote=False)  # escapes < > & but leaves quotes
 
 def get_top_gap_gainers(top_n=5):
     """
@@ -682,6 +626,7 @@ def get_top_gap_gainers(top_n=5):
     send_telegram_safe(message)
     send_telegram_safe(newsmessage)
     print("\n✅ Sent Telegram alerts for top gainers.")
+    return df
 
 
 def update_morning_scanner_with_ai(top_n=5):
@@ -802,13 +747,13 @@ def get_bars_cached(ticker: str, timeframe="1Min", days=180):
 
     # Map string to TimeFrame object
     tf_map = {
-        "1Min":  TimeFrame(1, TimeFrameUnit.Minute),
-        "5Min":  TimeFrame(5, TimeFrameUnit.Minute),
-        "15Min": TimeFrame(15, TimeFrameUnit.Minute),
-        "1Hour": TimeFrame(1, TimeFrameUnit.Hour),
-        "1Day":  TimeFrame(1, TimeFrameUnit.Day),
+        "1Min":  TimeFrame(1, tradeapi.TimeFrameUnit.Minute),
+        "5Min":  TimeFrame(5, tradeapi.TimeFrameUnit.Minute),
+        "15Min": TimeFrame(15,tradeapi.TimeFrameUnit.Minute),
+        "1Hour": TimeFrame(1, tradeapi.TimeFrameUnit.Hour),
+        "1Day":  TimeFrame(1, tradeapi.TimeFrameUnit.Day),
     }
-    tf_obj = tf_map.get(timeframe, TimeFrame(1, TimeFrameUnit.Day))
+    tf_obj = tf_map.get(timeframe, TimeFrame(1, tradeapi.TimeFrameUnit.Day))
 
     df_existing = None
     end_date = datetime.now(pytz.UTC)
@@ -908,6 +853,7 @@ import numpy as np
 import joblib
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
+from tensorflow.keras.models import load_model
 import xgboost as xgb
 
 # ============================
@@ -1207,13 +1153,14 @@ def core_signal_live(
     sma_long: float,
     atr: float,
     rsi: float,
-    model=None,
     lookback=60,
     historical_bars: pd.DataFrame = None,
     filters: dict = None,
     last_trade_time=None,
     current_time=None,
-    log_message=print
+    log_message=print,
+    ticker=None,
+    bars=None
 ) -> dict:
     """
     Core signal generator for live trading.
@@ -1279,17 +1226,17 @@ def core_signal_live(
         score -= filters['RSI_score']
 
     # --- AI prediction (reference only) ---
-    if model is not None and historical_bars is not None and len(historical_bars) >= lookback:
+    if bars is not None and len(bars) >= 60:
         try:
-            features = historical_bars[['close', 'SMA_short', 'SMA_long', 'RSI', 'ATR', 'volume']].iloc[-lookback:]
-            features = features.values.flatten().reshape(1, -1)
-            if hasattr(model, 'scaler'):
-                features = model.scaler.transform(features)
-            pred_class = model.predict(features)[0]
-            proba = model.predict_proba(features)[0] if hasattr(model, "predict_proba") else [0.5, 0.5]
-            out['AI_signal'] = 'LONG' if pred_class == 1 else 'SHORT'
-            out['AI_prob'] = float(max(proba))
-            log_message(f"🤖 AI forecast: {out['AI_signal']}, probability={out['AI_prob']:.2f}")
+            ai_signal, ai_conf = ai_predict(bars, ticker, lookback=60)
+            if ai_signal:
+                out['AI_signal'] = ai_signal
+                out['AI_prob'] = ai_conf
+                # optional: log AI reference
+                log_message(f"🤖 AI forecast: {ai_signal}, probability={ai_conf:.2f}")
+                # for debugging, show AI-adjusted score (does NOT change trading signal)
+                debug_score = score + ai_conf / 20
+                log_message(f"AI Score {debug_score:.2f} direction placeholder")
         except Exception as e:
             log_message(f"⚠️ AI model error: {e}")
 
@@ -1325,6 +1272,7 @@ def core_signal_live(
         log_message(f"📉 SHORT | Price={price:.2f} | ATR={atr:.4f} | Score={score:.2f}")
 
     return out
+
 
 
 
@@ -1587,8 +1535,65 @@ def optimize_filters(days=180, metric='Sharpe', model=None):
 ############                END        ####################################
 ##########################################################################
 
+###########################################################################
+############  POST MATKET DAILY SUMMARY AT 04:00 pm EST ######################
+############                START        ####################################
+##########################################################################
 
-from itertools import product
+# ================================
+# Daily Summary Helper
+# ================================
+def send_daily_summary():
+    """
+    Runs once daily at 4:00 PM EST to summarize all tickers' equity values.
+    Handles both dict and list return types from load_equity_snapshots().
+    """
+    try:
+        result = load_equity_snapshots()
+
+        # Handle (start, end) or single result
+        if isinstance(result, tuple) and len(result) == 2:
+            _, end_equity = result
+        else:
+            end_equity = result
+
+        # If it's a list, convert to a dict with index-based tickers or infer from structure
+        if isinstance(end_equity, list):
+            if all(isinstance(x, dict) and 'Ticker' in x and 'Equity' in x for x in end_equity):
+                # e.g. [{'Ticker': 'AAPL', 'Equity': 10120}, ...]
+                end_equity = {x['Ticker']: x['Equity'] for x in end_equity}
+            else:
+                # fallback if it's just a list of equity values
+                end_equity = {f"T{i+1}": v for i, v in enumerate(end_equity)}
+
+        if not end_equity:
+            log_message("⚠️ No end-of-day equity data found.")
+            send_message("⚠️ No end-of-day equity snapshot found.")
+            return
+
+        total_equity = sum(end_equity.values())
+
+        summary_lines = ["📊 End-of-Day Equity Summary\n"]
+        for t in sorted(end_equity.keys()):
+            summary_lines.append(f"💼 {t}  : {end_equity[t]:.2f}")
+
+        summary_lines.append("\n💰 Total Equity: {:.2f}".format(total_equity))
+
+        msg = "\n".join(summary_lines)
+        send_message(msg)
+        log_message(msg)
+        log_message("✅ End-of-day equity summary sent successfully.")
+
+    except Exception as e:
+        log_message(f"❌ Failed to send end-of-day summary: {e}")
+        send_message(f"❌ Failed to send summary: {e}")
+
+
+###########################################################################
+############  POST MATKET DAILY SUMMARY AT 04:00 pm EST ######################
+############                START        ####################################
+##########################################################################
+
 
 ########################################################################################
 ############   LIVE TRADING LOGIC AND HELPERS START ####################################
@@ -1596,68 +1601,99 @@ from itertools import product
 POSITIONS = {t: None for t in tickers}  # Track open positions for live trading 
 LAST_TRADE_TIME = {t: None for t in tickers}  # Cooldown tracking
 # Risk and position tracking
-RISK_PER_TRADE = 0.01
-positions = {t: None for t in tickers}          # Track open positions
-last_trade_time = {t: None for t in tickers}    # Cooldown tracking
-equity = {t: 10000 for t in tickers}            # Starting equity per ticker
+# Globals used in execute_trade
+positions = defaultdict(lambda: None)
+equity = defaultdict(lambda: 1000)
+last_trade_time = defaultdict(lambda: None)
+RISK_PER_TRADE = 0.01       # Starting equity per ticker
 
+EQUITY_WS = "trade_equity"
+equity_ws = sheet.worksheet(EQUITY_WS)
 
-# =======================
-# Update execute_trade to persist equity
-# =======================
-def execute_trade(ticker, signal):
-    global positions, equity, last_trade_time
-    pos = positions[ticker]
-    qty = max(1, int(RISK_PER_TRADE * equity[ticker] / signal['Risk'])) if signal['Risk'] else 1
+# ---------------------------
+# Load/Save Equity & Positions
+# ---------------------------
+def load_equity_sheet():
+    """
+    Loads tickers, positions, and equity from Google Sheet
+    Returns:
+        positions: dict[ticker] -> position info
+        equity: dict[ticker] -> total equity
+    """
+    df = pd.DataFrame(equity_ws.get_all_records())
+    positions = {}
+    equity = {}
+    for _, row in df.iterrows():
+        ticker = row['Ticker']
+        positions[ticker] = eval(row['Position']) if row['Position'] else None
+        equity[ticker] = float(row['Equity']) if 'Equity' in row else 1000
+    return positions, equity
+
+def save_equity_sheet(positions, equity):
+    """
+    Updates Google Sheet with positions and equity
+    """
+    data = []
+    for ticker, pos in positions.items():
+        data.append([ticker, str(pos), equity.get(ticker, 1000)])
+    equity_ws.clear()
+    equity_ws.update([["Ticker", "Position", "Equity"]] + data)
+
+# ---------------------------
+# Execute Trade
+# ---------------------------
+def execute_trade(ticker, signal, positions, equity, last_signal):
+    pos = positions.get(ticker)
+    prev_signal = last_signal.get(ticker)
+
+    # Prevent duplicate trades
+    if signal['signal'] == prev_signal:
+        return
+
+    qty = max(1, int(RISK_PER_TRADE * equity.get(ticker, 1000) / signal['Risk'])) if signal['Risk'] else 1
     now = datetime.now()
 
-    if pos is None and signal['signal'] in ("LONG","SHORT"):
-        positions[ticker] = {"entry_price":signal['entry_price'],
-                             "direction":1 if signal['signal']=='LONG' else -1,
-                             "qty":qty,
-                             "stop":signal['stop'],
-                             "tp":signal['tp']}
-        last_trade_time[ticker] = now
-        msg = f"🟢 Opened {signal['signal']} {ticker} at {signal['entry_price']:.2f} | Qty: {qty} AI_Signal = {signal['AI_signal']} and Prob = {signal['AI_Prob']}"
+    # Open new trade
+    if pos is None and signal['signal'] in ("LONG", "SHORT"):
+        positions[ticker] = {"entry_price": signal['entry_price'],
+                             "direction": 1 if signal['signal']=='LONG' else -1,
+                             "qty": qty,
+                             "stop": signal['stop'],
+                             "tp": signal['tp']}
+        last_signal[ticker] = signal['signal']
+        msg = f"🟢 Opened {signal['signal']} {ticker} at {signal['entry_price']:.2f} Qty={qty} AI_Signal={signal['AI_signal']} Prob={signal['AI_prob']}"
         print(msg)
-        send_message(msg)
-        log_trade({"Ticker":ticker,"Date":now,"Signal":signal['signal'],
-                   "Entry":signal['entry_price'],"Exit":"","PnL":0,"Qty":qty,"Equity":equity[ticker]})
-        update_equity_sheet(ticker, equity[ticker])
+        send_telegram_safe(msg)
 
+    # Close existing trade
     elif pos is not None:
         cur_price = signal['entry_price']
-        exit_cond = ((pos['direction']==1 and (cur_price<=pos['stop'] or cur_price>=pos['tp'])) or
-                     (pos['direction']==-1 and (cur_price>=pos['stop'] or cur_price<=pos['tp'])))
+        exit_cond = ((pos['direction']==1 and (cur_price <= pos['stop'] or cur_price >= pos['tp'])) or
+                     (pos['direction']==-1 and (cur_price >= pos['stop'] or cur_price <= pos['tp'])))
         if exit_cond:
-            pnl = (cur_price - pos['entry_price'])*pos['direction']*pos['qty']
+            pnl = (cur_price - pos['entry_price']) * pos['direction'] * pos['qty']
             equity[ticker] += pnl
-            msg = f"🔴 Closed {ticker} | PnL: {pnl:.2f} | New Equity: {equity[ticker]:.2f} AI_Signal = {signal['AI_signal']} and Prob = {signal['AI_Prob']}"
+            msg = f"🔴 Closed {ticker} | PnL={pnl:.2f} | New Equity={equity[ticker]:.2f} AI_Signal={signal['AI_signal']} Prob={signal['AI_prob']}"
             print(msg)
-            send_message(msg)
+            send_telegram_safe(msg)
             positions[ticker] = None
-            log_trade({"Ticker":ticker,"Date":now,"Signal":"CLOSE",
-                       "Entry":pos['entry_price'],"Exit":cur_price,"PnL":pnl,
-                       "Qty":pos['qty'],"Equity":equity[ticker]})
-            update_equity_sheet(ticker, equity[ticker])
+            last_signal[ticker] = None
+
+    # Save updated positions/equity to Google Sheet
+    save_equity_sheet(positions, equity)
 
 
 # ================================
-# Live trading loop
+# Live Trading Loop
 # ================================
-def live_trading_loop():
-    filters = {
-        'ATR_threshold': 0.05,
-        'SMA_score': 0.25,
-        'RSI_oversold': 30,
-        'RSI_overbought': 70,
-        'RSI_score': 0.2,
-        'STOP_ATR_MULT': 1.5,
-        'TP_ATR_MULT': 3.0,
-        'Score_threshold': 0.05,
-        'Cooldown_minutes': 15
-    }
-    print("KEY:", os.getenv("APCA_API_KEY_ID"))
+def live_trading_session():
+    """
+    Runs during market hours (9:30 AM–4:00 PM EST).
+    """
+    log_message("🚀 Starting live paper trading loop...")
+    positions, equity = load_equity_sheet()
+    last_signal = defaultdict(lambda: None)
+
     for ticker in tickers:
         last_bar, bars = fetch_last_bar(ticker)
         if last_bar is None:
@@ -1671,98 +1707,50 @@ def live_trading_loop():
         if np.isnan([sma_short, sma_long, atr, rsi]).any():
             continue
 
+        ai_model, _ = load_ai_model(ticker)
+
         signal = core_signal_live(
             last_bar=last_bar,
             sma_short=sma_short,
             sma_long=sma_long,
             atr=atr,
             rsi=rsi,
-            filters=filters,
-            last_trade_time=last_trade_time[ticker],
+            model=ai_model,
+            lookback=60,
+            historical_bars=bars,
+            filters=None,
+            last_trade_time=None,
             current_time=datetime.now(),
             log_message=logging.info
         )
 
-        if signal['signal'] in ("LONG", "SHORT"):
-            last_trade_time[ticker] = datetime.now()
-
-        execute_trade(ticker, signal)
+        execute_trade(ticker, signal, positions, equity, last_signal)
+    log_message("✅ Trading session completed and equity snapshot saved.")
 
 
-##### This is for Real Alpaca trading ################                
-def execute_alpaca_trade(ticker, signal):
-    """Place real Alpaca order with stop-loss and take-profit"""
-   # global POSITIONS, LAST_TRADE_TIME, RISK_PER_TRADE,
-    global API
-    position = POSITIONS[ticker]
-    account = API.get_account()
-    equity = float(account.cash)
-    qty = max(1, int(RISK_PER_TRADE * equity / signal['Risk'])) if signal['Risk'] else 1
-
-    # Open position if flat
-    if position is None and signal['signal'] in ("LONG", "SHORT"):
-        side = "buy" if signal['signal'] == 'LONG' else "sell"
-        try:
-            order = API.submit_order(
-                symbol=ticker,
-                qty=qty,
-                side=side,
-                type='market',
-                time_in_force='gtc'
-            )
-            POSITIONS[ticker] = {
-                "entry_price": signal['entry_price'],
-                "direction": 1 if signal['signal'] == 'LONG' else -1,
-                "qty": qty,
-                "stop": signal['stop'],
-                "tp": signal['tp'],
-                "order_id": order.id
-            }
-            LAST_TRADE_TIME[ticker] = datetime.now()
-            print(f"🟢 {side.upper()} order submitted for {ticker} | Qty: {qty}")
-        except Exception as e:
-            print(f"❌ Order failed for {ticker}: {e}")
-
-    # Manage exit if position exists
-    elif position is not None:
-        current_price = signal['entry_price']
-        if (position['direction'] == 1 and (current_price <= position['stop'] or current_price >= position['tp'])) or \
-           (position['direction'] == -1 and (current_price >= position['stop'] or current_price <= position['tp'])):
-            side = "sell" if position['direction'] == 1 else "buy"
-            try:
-                API.submit_order(
-                    symbol=ticker,
-                    qty=position['qty'],
-                    side=side,
-                    type='market',
-                    time_in_force='gtc'
-                )
-                print(f"🔴 Closed {ticker} at {current_price:.2f}")
-                POSITIONS[ticker] = None
-            except Exception as e:
-                print(f"❌ Close order failed for {ticker}: {e}")
-
-
-
-########################################################################################
-############   LIVE TRADING LOGIC AND HELPERS END ####################################
-########################################################################################
-
+# ================================
+# Entrypoint
+# ================================
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python moving_average_bot.py [morning|analysis|live|backtest|auto_train]")
+        print("Usage: python moving_average_bot.py [morning|live|backtest]")
         sys.exit(1)
-    mode = sys.argv[1]
+
+    mode = sys.argv[1].lower()
 
     if mode == "morning":
         update_morning_scanner_with_ai()
-    elif mode == "live":      
+     
+    elif mode == "live":
         try:
-            live_trading_loop()
+            live_trading_session()
         except Exception as e:
             logging.error(f"Error in live trading loop: {e}")
-            send_message(f"❌ Error in live trading loop: {e}")
+            send_message(f"❌ Live trading error: {e}")
+
+    elif mode == "analysis":
+        send_daily_summary()
+
     elif mode == "backtest":
-       #auto_train_models(retrain=False)
-       best_filters = optimize_filters()
-       print("Use this filter set for live trading:", best_filters)
+        best_filters = optimize_filters()
+        print("Best filters for live trading:", best_filters)
