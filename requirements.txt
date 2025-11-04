@@ -29,4 +29,4 @@ newsapi-python
 matplotlib>=3.9.0
 joblib>=1.3.0
 finvizfinance
-xgboost==1.7.7
+xgboost==1.7.6
