@@ -80,5 +80,5 @@ jobs:
           FMP_API_KEY: ${{secrets.FMP_API_KEY}}
           NEWS_API_KEY: ${{secrets.NEWS_API_KEY}}
         run: |
-          python moving_average_bot.py backtest
-          python moving_average_bot.py auto_train
+        
+          
