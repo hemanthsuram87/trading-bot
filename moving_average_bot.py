@@ -54,6 +54,7 @@ import matplotlib.pyplot as plt
 
 from collections import defaultdict
 import pytz
+from itertools import product
 # ================= CONFIG =================
 ALPACA_KEY = os.getenv("ALPACA_KEY")
 ALPACA_SECRET = os.getenv("ALPACA_SECRET")
