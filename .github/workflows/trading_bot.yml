@@ -38,7 +38,7 @@ jobs:
           NEWS_API_KEY: ${{secrets.NEWS_API_KEY}}
 
       - name: Morning Scan
-        if: github.event_name == 'schedule' && github.event.schedule == '*/15 12-14 * * 1-5'
+        if: github.event_name == 'schedule' && github.event.schedule == '*/15 12-14 * * 1-5' || github.event_name == 'workflow_dispatch'
         env:
           ALPACA_KEY: ${{secrets.ALPACA_KEY}}
           ALPACA_SECRET: ${{secrets.ALPACA_SECRET}}
@@ -60,7 +60,7 @@ jobs:
         run: python moving_average_bot.py analysis
 
       - name: Live Trading
-        if: github.event_name == 'schedule' && startsWith(github.event.schedule, '*/10') || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'schedule' && startsWith(github.event.schedule, '*/10') 
         env:
           ALPACA_KEY: ${{secrets.ALPACA_KEY}}
           ALPACA_SECRET: ${{secrets.ALPACA_SECRET}}
