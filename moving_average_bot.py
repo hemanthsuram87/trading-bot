@@ -53,7 +53,7 @@ from tensorflow.keras.models import Sequential, load_model
 import matplotlib.pyplot as plt
 
 from collections import defaultdict
-
+import pytz
 # ================= CONFIG =================
 ALPACA_KEY = os.getenv("ALPACA_KEY")
 ALPACA_SECRET = os.getenv("ALPACA_SECRET")
