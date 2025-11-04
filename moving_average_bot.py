@@ -1,57 +1,58 @@
-import os
-import time
-import pytz
-import json
-import requests
-import numpy as np
-import pandas as pd
-from datetime import datetime, timedelta, time as dt_time,UTC
-import tensorflow as tf
-from tensorflow.keras.models import load_model
-from tensorflow.keras.callbacks import EarlyStopping
-from tensorflow.keras.layers import LSTM, Dense
-from tensorflow.keras.models import Sequential
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-import logging
-# TA libs (some functions use ta)
-import ta
-from ta.trend import ADXIndicator
-import yfinance as yf
-# Alpaca
-import alpaca_trade_api as tradeapi
-from finvizfinance.screener.overview import Overview
-
-import matplotlib.pyplot as plt
-from ta.trend import ADXIndicator, MACD
-from ta.momentum import RSIIndicator
-
-import joblib
-import math
-import numpy as np
-import pandas as pd
-from datetime import datetime, timedelta
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
-from ta.trend import ADXIndicator
-import io
-
+# Standard libraries
+import collections
+import functools
 import html
+import io
+import itertools
+import json
+import logging
+import math
+import os
 import re
 import sys
-import os
+import time
+from collections import defaultdict
+from datetime import datetime, timedelta, time as dt_time, UTC
+from typing import Dict
+
+# Networking / requests
+import gspread
+import requests
+from oauth2client.service_account import ServiceAccountCredentials
+
+# Data handling
 import numpy as np
 import pandas as pd
-from datetime import datetime
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import accuracy_score
-from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
+
+# Financial / trading
+import alpaca_trade_api as tradeapi
+from alpaca_trade_api.rest import REST, TimeFrame
+import yfinance as yf
+from finvizfinance.screener.overview import Overview
+
+# Technical analysis
+import ta
+from ta.momentum import RSIIndicator
+from ta.trend import ADXIndicator, MACD
+
+# Machine learning / AI
+import joblib
+import xgboost as xgb
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, mean_squared_error
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+
+# Deep learning
+import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import Bidirectional, Dense, Dropout, LSTM
+from tensorflow.keras.models import Sequential, load_model
+
+# Plotting
+import matplotlib.pyplot as plt
+
+from collections import defaultdict
 
 # ================= CONFIG =================
 ALPACA_KEY = os.getenv("ALPACA_KEY")
