@@ -1,4 +1,3 @@
-# Standard libraries
 import collections
 import functools
 import html
@@ -12,8 +11,8 @@ import re
 import sys
 import time
 from collections import defaultdict
-from datetime import datetime, timedelta, time as dt_time, UTC
-from typing import Dict
+from datetime import datetime, timedelta, time as dt_time, UTC,timezone
+from typing import Dict,Optional
 
 # Networking / requests
 import gspread
@@ -33,21 +32,7 @@ from finvizfinance.screener.overview import Overview
 # Technical analysis
 import ta
 from ta.momentum import RSIIndicator
-from ta.trend import ADXIndicator, MACD
-
-# Machine learning / AI
-import joblib
-import xgboost as xgb
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, mean_squared_error
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
-
-# Deep learning
-import tensorflow as tf
-from tensorflow.keras.callbacks import EarlyStopping
-from tensorflow.keras.layers import Bidirectional, Dense, Dropout, LSTM
-from tensorflow.keras.models import Sequential, load_model
+from ta.trend import ADXIndicator, MACD, SMAIndicator
 
 # Plotting
 import matplotlib.pyplot as plt
@@ -55,6 +40,8 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 import pytz
 from itertools import product
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import feedparser
 # ================= CONFIG =================
 ALPACA_KEY = os.getenv("ALPACA_KEY")
 ALPACA_SECRET = os.getenv("ALPACA_SECRET")
@@ -70,33 +57,26 @@ api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, base_url=ALPACA_BASE_URL)
 
 EST = pytz.timezone("US/Eastern")
 
-# Optional email alerts
-EMAIL_SMTP = os.getenv("EMAIL_SMTP")  # e.g. smtp.gmail.com:587
-EMAIL_FROM = os.getenv("EMAIL_FROM")
-EMAIL_TO = os.getenv("EMAIL_TO")
-EMAIL_USER = os.getenv("EMAIL_USER")  # optional
-EMAIL_PASS = os.getenv("EMAIL_PASS")  # optional
-
-# Auto close settings
-CLOSE_LOSS_PCT = float(os.getenv("CLOSE_LOSS_PCT", "-5"))  # negative percent threshold to close (e.g. -5 -> -5%)
-MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "240"))  # max minutes to keep a position
-
 SMA_SHORT = int(os.getenv("SMA_SHORT", "20"))
 SMA_LONG = int(os.getenv("SMA_LONG", "50"))
 ATR_PERIOD = int(os.getenv("ATR_PERIOD", "14"))
 ATR_MULTIPLIER = float(os.getenv("ATR_MULTIPLIER", "1"))
 SIGNAL_EXPIRY_DAYS = int(os.getenv("SIGNAL_EXPIRY_DAYS", "5"))
-print("KEY:", os.getenv("APCA_API_KEY_ID"))
+NEWS_API_KEY="fa1d035152ac4016bd4d8647244d1748"
 LOG_DIR = "logs"
 SIGNAL_DIR = "signals"
 MODEL_DIR = "models"
 
+os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(SIGNAL_DIR, exist_ok=True)
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+# logging
 EST = pytz.timezone("US/Eastern")
 
-# Auto close settings
-CLOSE_LOSS_PCT = float(os.getenv("CLOSE_LOSS_PCT", "-5"))  # negative percent threshold to close (e.g. -5 -> -5%)
-MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "240"))  # max minutes to keep a position
 
+#Ctrl+k Ctrl+C  - comment   
+#Ctrl+ K Ctrl U  - uncomment
 
 BACKTEST_DAYS = 60  # Adjustable, conservative by default
 MODEL_DIR = "models/sklearn/"
@@ -112,16 +92,24 @@ os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(SIGNAL_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# logging
-EST = pytz.timezone("US/Eastern")
+CACHE_FILE = "sent_news_cache.json"
+YAHOO_NEWS_FEED = "https://finance.yahoo.com/news/rssindex"
+analyzer = SentimentIntensityAnalyzer()
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 def log_message(msg):
     ts = datetime.now(EST).strftime("[%Y-%m-%d %H:%M:%S]")
     logging.info(f"{ts} {msg}")
     print(f"{ts} {msg}")
 
+#################################################
+########### Initialize ##########################
+#################################################
 # Alpaca client
 api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, base_url=ALPACA_BASE_URL)
+# create once (reuse)
+
+
 
 # Google Sheets
 if os.path.exists("google_creds.json"):
@@ -130,15 +118,16 @@ if os.path.exists("google_creds.json"):
         creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
         client = gspread.authorize(creds)
         sheet = client.open("Daily_stocks")
-        tickers_ws = sheet.worksheet("Tickers")
-       # tickers_ms = sheet.worksheet("Morning_Scanner")
-        tickers = tickers_ws.col_values(1)
+        sheet_ws = sheet.worksheet("Tickers")
+        sheet_ms = sheet.worksheet("Morning_Scanner")
+        tickers_ws = sheet_ws.col_values(1)
         
         # ✅ Get all rows from "Morning_Scanner"
-       # rows = tickers_ms.get_all_records()
+        rows = sheet_ms.get_all_records()
 
         # ✅ Extract only ticker symbols (first column)
-        #tickers = [row["Ticker"] for row in rows if row.get("Ticker")]
+        tickers_ms = [row["Ticker"] for row in rows if row.get("Ticker")]
+        tickers = list(set(tickers_ws + tickers_ms))
     except Exception as e:
         log_message(f"⚠️ Google Sheets init failed: {e}")
         tickers = []
@@ -165,7 +154,7 @@ def send_message(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     chunks = [msg[i:i+MAX_LEN] for i in range(0, len(msg), MAX_LEN)]
     for idx, chunk in enumerate(chunks, 1):
-        data = {"chat_id": TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": "Markdown"}
+        data = {"chat_id": TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": ""}
         try:
             r = requests.post(url, data=data, timeout=10)
             if r.status_code != 200:
@@ -242,70 +231,6 @@ def log_trade(trade: dict):
         trades_ws.append_row([trade[k] if k in trade else "" for k in trades_ws.row_values(1)])
 
 
-def init_equity( tickers, default_equity=1000):
-    """
-    Initialize equity per ticker from Google Sheet or create missing tickers.
-    Only adds tickers that are not already present.
-    Returns a dict: {ticker: equity_value}
-    """
-    equity = {}
-    if sheet:
-        # Try to open the worksheet
-        try:
-            ws = sheet.worksheet("TickerEquity")
-        except gspread.WorksheetNotFound:
-            ws = sheet.add_worksheet(title="TickerEquity", rows="100", cols="5")
-            ws.append_row(["Ticker", "Equity", "LastUpdate"])
-
-        # Fetch existing tickers
-        existing_records = ws.get_all_records()
-        existing_tickers = [row["Ticker"] for row in existing_records]
-
-        # Populate equity dict and add missing tickers
-        for t in tickers:
-            if t in existing_tickers:
-                # Use existing equity
-                equity[t] = next(row["Equity"] for row in existing_records if row["Ticker"] == t)
-            else:
-                # Add new ticker
-                ws.append_row([t, default_equity, datetime.now().isoformat()])
-                equity[t] = default_equity
-    else:
-        # Fallback: Excel
-        file_path = "equity.xlsx"
-        if os.path.exists(file_path):
-            df = pd.read_excel(file_path)
-        else:
-            df = pd.DataFrame(columns=["Ticker","Equity","LastUpdate"])
-        for t in tickers:
-            if t in df['Ticker'].values:
-                equity[t] = df.loc[df['Ticker']==t,'Equity'].values[0]
-            else:
-                df = pd.concat([df, pd.DataFrame([{"Ticker":t,"Equity":default_equity,"LastUpdate":datetime.now()}])], ignore_index=True)
-                equity[t] = default_equity
-        df.to_excel(file_path, index=False)
-
-    return equity
-
-SHEET_START = "Equity_Start"
-SHEET_END = "Equity_End"
-
-def load_equity_snapshots():
-    """
-    Loads start and end equity snapshots from Google Sheets.
-    Returns (start_equity, end_equity)
-    """
-    if sheet:
-        # Try to open the worksheet
-        try:
-            ws = sheet.worksheet("TickerEquity")
-        except gspread.WorksheetNotFound:
-            ws = sheet.add_worksheet(title="TickerEquity", rows="100", cols="5")
-            ws.append_row(["Ticker", "Equity", "LastUpdate"])
-
-        # Fetch existing tickers
-        existing_records = ws.get_all_records()
-    return existing_records
 
 
 # ================= INDICATORS =================
@@ -340,101 +265,24 @@ def compute_macd(close):
     signal = macd.ewm(span=9, adjust=False).mean()
     return macd, signal
 
-# ================= AI FORECAST (safeguarded) =================
-tf.random.set_seed(42)
-np.random.seed(42)
 
-
-
-def deep_learning_forecast(ticker, bars, sheet=None, lookback=60, forecast_steps=1, retrain=False):
+def add_indicators(bars: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds SMA, RSI, and ATR indicators to a price dataframe.
+    """
     try:
-        # --- Features ---
-        df = bars[['open', 'high', 'low', 'close', 'volume']].dropna().reset_index(drop=True)
-        if len(df) < lookback + forecast_steps + 1:
-            log_message(f"⚠️ Not enough data for LSTM {ticker}")
-            return None
-
-        # Compute returns
-        df['return'] = df['close'].pct_change().fillna(0)
-        feature_cols = ['open', 'high', 'low', 'close', 'volume', 'return']
-
-        scaler = MinMaxScaler()
-        scaled = scaler.fit_transform(df[feature_cols].values)
-
-        X, y = [], []
-        for i in range(lookback, len(scaled) - forecast_steps):
-            X.append(scaled[i-lookback:i])
-            # classify next step return as direction
-            next_return = df['return'].iloc[i + forecast_steps]
-            y.append(1 if next_return > 0 else 0)  # 1 = bullish, 0 = bearish
-        X, y = np.array(X), np.array(y)
-        if X.size == 0:
-            return None
-
-        # Walk-forward style split (last 20% for validation)
-        split_idx = int(0.8 * len(X))
-        X_train, X_val = X[:split_idx], X[split_idx:]
-        y_train, y_val = y[:split_idx], y[split_idx:]
-
-        # --- Model path ---
-        model_path = os.path.join(MODEL_DIR, f"{ticker}_lstm_trend.h5")
-        model = None
-        if os.path.exists(model_path) and not retrain:
-            try:
-                model = load_model(model_path, compile=False)
-                model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-                log_message(f"✅ Loaded model for {ticker}")
-            except Exception as e:
-                log_message(f"⚠️ Model load failed ({ticker}): {e}")
-                model = None
-
-        if model is None:
-            model = Sequential([
-                Bidirectional(LSTM(64, return_sequences=True), input_shape=(lookback, len(feature_cols))),
-                Dropout(0.2),
-                Bidirectional(LSTM(32)),
-                Dropout(0.2),
-                Dense(1, activation='sigmoid')  # output probability
-            ])
-            model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-            es = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-            model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=50, batch_size=32, verbose=0, callbacks=[es])
-            model.save(model_path)
-            log_message(f"💾 Model trained & saved for {ticker}")
-
-        # --- Forecast ---
-        last_seq = scaled[-lookback:].reshape((1, lookback, len(feature_cols)))
-        prob = model.predict(last_seq, verbose=0)[0][0]
-        trend = "BULLISH" if prob > 0.5 else "BEARISH"
-        confidence = round(prob*100, 2) if trend=="BULLISH" else round((1-prob)*100,2)
-        current_price = df['close'].iloc[-1]
-
-        # Approximate forecast price using last close + mean return
-        forecast_price = current_price * (1 + df['return'].iloc[-lookback:].mean())
-
-        # --- Save to sheet if available ---
-        if sheet:
-            try:
-                try:
-                    ws = sheet.worksheet("AI_Forecast")
-                except Exception:
-                    ws = sheet.add_worksheet(title="AI_Forecast", rows="1000", cols="10")
-                ws.append_row([datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                               str(ticker), float(round(current_price,2)), float(round(forecast_price,2)), str(trend), float(round(confidence))])
-            except Exception as e:
-                log_message(f"⚠️ Sheets update failed: {e}")
-
-        return {
-            "ticker": ticker,
-            "trend": trend,
-            "confidence": confidence,
-            "current": round(current_price, 2),
-            "forecast": round(forecast_price, 2)
-        }
-
+        bars = bars.copy()
+        bars['sma_short'] = bars['close'].rolling(window=20).mean()
+        bars['sma_long'] = bars['close'].rolling(window=50).mean()
+        bars['rsi'] = ta.momentum.RSIIndicator(bars['close'], window=14).rsi()
+        bars['atr'] = ta.volatility.AverageTrueRange(
+            high=bars['high'], low=bars['low'], close=bars['close'], window=14
+        ).average_true_range()
+        bars.dropna(inplace=True)
+        return bars
     except Exception as e:
-        log_message(f"⚠️ AI forecast failed for {ticker}: {e}")
-        return None
+        print(f"⚠️ Indicator generation failed: {e}")
+        return bars
 
 
 # ===================== HELPERS =====================
@@ -633,16 +481,19 @@ def get_top_gap_gainers(top_n=5):
 
 def update_morning_scanner_with_ai(top_n=5):
     """
-    Fetch top gainers, analyze technicals + AI forecast,
+    Fetch top gainers, analyze technicals,
     send Telegram alerts, and update Morning_Scanner Google Sheet.
     """
     # Step 1: Fetch top gainers
     df = get_top_gap_gainers(top_n=top_n)
     if df is None or df.empty:
-        print("⚠️ No top gainers found today.")
+        log_message("⚠️ No top gainers found today.")
+        log_message("⚠️ No top gainers found today.")
         return
-    
-    potential = []
+
+    results = []
+
+    results = []
     ai_forecasts = []
 
     for _, row in df.iterrows():
@@ -658,51 +509,48 @@ def update_morning_scanner_with_ai(top_n=5):
                 feed="iex"
             ).df
 
-            if bars.empty or len(bars) < 20:
+            if bars.empty:
                 continue
 
-            bars = safe_tz_localize_and_convert(bars)
-            feat_df, df = create_features(bars)  # precompute SMA, RSI, ATR, etc.
-             # ✅ check existence of indicators
-            
-            prev = feat_df.iloc[-2]
-            curr = feat_df.iloc[-1]
-            
-            # Technical signals
-            sma_gap = abs((curr["SMA20"] - curr["SMA50"]) / (curr["SMA50"] or 1)) * 100
-            rsi = round(curr["RSI"], 1)
-            adx = round(curr.get("ADX", 0), 1)
-            vol_ratio = curr["VOL_RATIO"]
-            bullish_ready = prev["SMA20"] <= prev["SMA50"] and curr["SMA20"] > curr["SMA50"]
-            bearish_ready = prev["SMA20"] >= prev["SMA50"] and curr["SMA20"] < curr["SMA50"]
-            direction = "BULLISH" if bullish_ready else "BEARISH" if bearish_ready else "NEUTRAL"
-            score = sum([int(bullish_ready or bearish_ready), int(adx > 20), int(vol_ratio > 1.0)])
+            # Calculate technical indicators
+            bars = calculate_indicators_for_alpaca(bars)
+            last_bar = bars.iloc[-1]
 
-            # AI Forecast integration
-            if len(bars) >= 60:  # require sufficient bars
-                ai_signal, ai_conf = ai_predict(bars, ticker, lookback=60)
-                if ai_signal:
-                    ai_forecasts.append({"ticker": ticker, "trend": ai_signal, "confidence": ai_conf, "current": close})
-                    direction += f" | AI:{ai_signal}"
-                    score += ai_conf / 20  # scale confidence to score
-            print(f"AI Score {score}   direction {direction}")
-            
-            potential.append([
-                ticker, direction, round(close, 2),
-                rsi, adx, round(vol_ratio, 2),
-                round(sma_gap, 2), round(score, 2)
-            ])
+            # Generate signal with
+            signal = core_signal_live(
+                last_bar=last_bar,
+                sma_short=last_bar['SMA_short'],
+                sma_long=last_bar['SMA_long'],
+                atr=last_bar['ATR'],
+                rsi=last_bar['RSI'],
+                ticker=ticker,
+                historical_bars=bars,
+                current_time=datetime.now()
+            )
+
+            # Append result for sheet and Telegram
+            results.append({
+                'Ticker': ticker,
+                'Direction': signal['signal'],
+                'Price': close,
+                'RSI': last_bar['RSI'],
+                'ADX': last_bar.get('ADX', np.nan),
+                'VolSpike': last_bar.get('VolSpike', np.nan),
+                'SMA_Gap%': last_bar.get('SMA_Gap%', np.nan),
+                'Score': signal['score']
+            })
+
 
         except Exception as e:
             log_message(f"⚠️ Analysis failed for {ticker}: {e}")
 
-    if not potential:
+    if not results:
         send_message("🌄 Morning scan complete — no actionable tickers today.")
         return
 
-    # Step 3: Update Google Sheet
+    # Step 2: Update Google Sheet (Morning_Scanner)
     columns = ["Ticker", "Direction", "Price", "RSI", "ADX", "VolSpike", "SMA_Gap%", "Score"]
-    df_potential = pd.DataFrame(potential, columns=columns)
+    df_results = pd.DataFrame(results, columns=columns)
     try:
         if 'sheet' in globals():
             try:
@@ -710,24 +558,23 @@ def update_morning_scanner_with_ai(top_n=5):
             except Exception:
                 ws = sheet.add_worksheet(title="Morning_Scanner", rows="1000", cols=str(len(columns)))
             ws.clear()
-            ws.update([columns] + df_potential.values.tolist())
-            log_message(f"📊 Morning_Scanner updated with {len(df_potential)} tickers including AI.")
+            df_results = df_results.fillna("")
+            df_results.replace([np.inf, -np.inf], "", inplace=True)
+            ws.update([columns] + df_results.values.tolist())
+            log_message(f"📊 Morning_Scanner updated with {len(df_results)} tickers.")
     except Exception as e:
         log_message(f"⚠️ Failed to update Morning_Scanner: {e}")
-
-    # Step 4: Send Telegram Alerts
-    msg = "📊 Morning Scanner — Top Gainers with AI Forecast\n\n"
-    for _, r in df_potential.iterrows():
-        msg += (f"🔹 {r['Ticker']} | {r['Direction']} | Price: {r['Price']}\n"
-                f"RSI: {r['RSI']} | ADX: {r['ADX']} | Vol x{r['VolSpike']} | SMA Gap: {r['SMA_Gap%']}% | Score: {r['Score']}\n\n")
-
-    if ai_forecasts:
-        msg += "\n🤖 AI Forecasts Summary:\n"
-        for f in ai_forecasts:
-            msg += (f"{f['ticker']}: Predicted {f['trend']} | "
-                    f"Current {f['current']:.2f} | Confidence {f['confidence']*100:.1f}%\n")
+    df_results1 = pd.DataFrame(results, columns=columns)
+    # Step 3: Send Telegram Alerts
+    msg = "📊 Morning Scanner — Top Gainers Forecast\n\n"
+    for _, r in df_results1.iterrows():
+        msg += (f"🔹 {r['Ticker']} | {r['Direction']} | Price: {r['Price']:.2f}\n"
+                f"RSI: {r['RSI']:.2f} | ADX: {r['ADX']} | Vol x{r['VolSpike']} | SMA Gap: {r['SMA_Gap%']}% | Score: {r['Score']:.2f}\n"
+                )
+        
     send_message(msg)
-    log_message("✅ Telegram alert sent for Morning Scanner tickers with AI analysis.")
+    log_message("✅ Telegram alert sent for Morning Scanner tickers with analysis.")
+
 
    
 # ================= MORNING SCAN TOP MOVERS AND LOOSERS  END =================
@@ -845,129 +692,52 @@ def resample_bars(df_1m: pd.DataFrame, timeframe: str) -> pd.DataFrame:
 
 
 
-###############################################################
-################ AI MODEL FOR TRADING HELPERS #################
-###############################################################
-
-import os
-import pandas as pd
-import numpy as np
-import joblib
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
-from tensorflow.keras.models import load_model
-import xgboost as xgb
-
 # ============================
 # Config / Paths
 # ============================
 MODEL_DIR = "models"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# ============================
-# Feature preparation
-# ============================
-def prepare_features(df: pd.DataFrame, lookback=10):
-    """
-    Prepares lagged features for AI model.
-    Args:
-        df: DataFrame with OHLCV and indicators (sma_short, sma_long, rsi, atr, volume)
-        lookback: number of bars for rolling features
-    Returns:
-        X: feature matrix
-        y: labels (1=Bullish, 0=Bearish)
-    """
-    df = df.copy()
-    # Example label: 1 if next close > current close, else 0
-    df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
+def ensure_model_dir():
+    if not os.path.exists(MODEL_DIR):
+        os.makedirs(MODEL_DIR)
+
+# ===============================
+# Indicators Calculation
+# ===============================
+def calculate_indicators(bars: pd.DataFrame, sma_short=20, sma_long=50, rsi_period=14, atr_period=14):
+    df = bars.copy()
     
-    # Rolling / lag features
-    features = ['close', 'sma_short', 'sma_long', 'rsi', 'atr', 'volume']
-    X = []
-    y = []
+    # Calculate SMA and RSI indicators
+    df['SMA_short'] = SMAIndicator(df['Close'], window=sma_short).sma_indicator()
+    df['SMA_long'] = SMAIndicator(df['Close'], window=sma_long).sma_indicator()
+    df['RSI'] = RSIIndicator(df['Close'], window=rsi_period).rsi()
     
-    for i in range(lookback, len(df)-1):
-        vals = df[features].iloc[i-lookback:i].values.flatten()
-        if not np.any(pd.isna(vals)):
-            X.append(vals)
-            y.append(df['target'].iloc[i])
+    # Simple ATR calculation
+    df['ATR'] = df['Close'].rolling(atr_period).apply(lambda x: x.max() - x.min(), raw=False)
     
-    return np.array(X), np.array(y)
+    # Drop any rows with NaN values (from rolling windows)
+    df.dropna(inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    
+    return df
 
-# ============================
-# Train or update AI model
-# ============================
-def train_ai_model(df: pd.DataFrame, ticker: str, lookback=10):
-    """
-    Train or update XGBoost model for a ticker.
-    Saves model and scaler to disk.
-    """
-    X, y = prepare_features(df, lookback)
-    if len(X) == 0:
-        print(f"⚠️ Not enough data to train {ticker}")
-        return None
-
-    # Split train/test
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-
-    # Scale features
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_test = scaler.transform(X_test)
-
-    # Train model
-    model = xgb.XGBClassifier(
-        n_estimators=200,
-        max_depth=4,
-        learning_rate=0.05,
-        use_label_encoder=False,
-        eval_metric='logloss'
-    )
-    model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
-
-    # Save model and scaler
-    joblib.dump(model, f"{MODEL_DIR}/{ticker}_xgb_model.pkl")
-    joblib.dump(scaler, f"{MODEL_DIR}/{ticker}_scaler.pkl")
-    print(f"✅ Trained AI model for {ticker}")
-
-    return model, scaler
-
-# ============================
-# Load existing model
-# ============================
-def load_ai_model(ticker: str):
-    try:
-        model = joblib.load(f"{MODEL_DIR}/{ticker}_xgb_model.pkl")
-        scaler = joblib.load(f"{MODEL_DIR}/{ticker}_scaler.pkl")
-        return model, scaler
-    except Exception:
-        return None, None
-
-# ============================
-# AI prediction for core_signal
-# ============================
-def ai_predict(df: pd.DataFrame, ticker: str, lookback=10):
-    model, scaler = load_ai_model(ticker)
-    if model is None or scaler is None:
-        return None, 0.5  # default neutral
-
-    # Take last lookback bars
-    features = ['close', 'sma_short', 'sma_long', 'rsi', 'atr', 'volume']
-    if len(df) < lookback:
-        return None, 0.5
-
-    X = df[features].iloc[-lookback:].values.flatten().reshape(1, -1)
-    X_scaled = scaler.transform(X)
-    pred_class = model.predict(X_scaled)[0]
-    pred_prob = float(max(model.predict_proba(X_scaled)[0]))
-    signal = "Bullish" if pred_class == 1 else "Bearish"
-    return signal, pred_prob
-
-
-###############################################################
-#############  AI Model traing end ############################
-###############################################################
-
+def calculate_indicators_for_alpaca(bars: pd.DataFrame, sma_short=20, sma_long=50, rsi_period=14, atr_period=14):
+    df = bars.copy()
+    
+    # Calculate SMA and RSI indicators
+    df['SMA_short'] = SMAIndicator(df['close'], window=sma_short).sma_indicator()
+    df['SMA_long'] = SMAIndicator(df['close'], window=sma_long).sma_indicator()
+    df['RSI'] = RSIIndicator(df['close'], window=rsi_period).rsi()
+    
+    # Simple ATR calculation
+    df['ATR'] = df['close'].rolling(atr_period).apply(lambda x: x.max() - x.min(), raw=False)
+    
+    # Drop any rows with NaN values (from rolling windows)
+    df.dropna(inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    
+    return df
 
 # =========================
 # CORE SIGNAL FOR BACKTEST
@@ -979,8 +749,10 @@ def ai_predict(df: pd.DataFrame, ticker: str, lookback=10):
 # ======================
 # Simplified core signal
 # ======================
-import numpy as np
+
+
 import pandas as pd
+import numpy as np
 from datetime import timedelta
 
 def core_signal(
@@ -989,17 +761,17 @@ def core_signal(
     model=None,
     last_trade_time=None,
     current_time=None,
+    feature_columns: list = None,
     log_message=print
 ) -> dict:
     """
-    🚀 Production-grade core signal generator.
-    Works for both backtesting and live trading.
-    Always returns a safe, well-structured dictionary.
+    🚀 Optimized production-ready signal generator.
 
     Features:
-    - SMA, RSI, ATR, and optional AI-based scoring (calculated dynamically if not present).
-    - Cooldown logic to prevent duplicate signals.
-    - Adaptive threshold-based scoring system.
+    - SMA, RSI, ATR calculated dynamically if missing
+    - Cooldown logic
+    - Threshold-based scoring
+    - Safe output for backtesting and live trading
     """
 
     # === Default Filter Values ===
@@ -1038,18 +810,20 @@ def core_signal(
 
     df = df.copy()
 
-    # === Calculate SMA, ATR, RSI dynamically if missing ===
-    if 'SMA_short' not in df.columns:
+    # === Calculate Indicators Dynamically ===
+    if 'SMA_short' not in df:
         df['SMA_short'] = df['close'].rolling(filters['SMA_short_period']).mean()
-    if 'SMA_long' not in df.columns:
+    if 'SMA_long' not in df:
         df['SMA_long'] = df['close'].rolling(filters['SMA_long_period']).mean()
-    if 'ATR' not in df.columns:
-        df['H-L'] = df['high'] - df['low']
-        df['H-C'] = (df['high'] - df['close'].shift()).abs()
-        df['L-C'] = (df['low'] - df['close'].shift()).abs()
-        df['TR'] = df[['H-L', 'H-C', 'L-C']].max(axis=1)
+    if 'ATR' not in df:
+        df['TR'] = df[['high', 'low', 'close']].apply(
+            lambda row: max(row['high'] - row['low'],
+                            abs(row['high'] - row['close']),
+                            abs(row['low'] - row['close'])),
+            axis=1
+        )
         df['ATR'] = df['TR'].rolling(filters['ATR_period']).mean()
-    if 'RSI' not in df.columns:
+    if 'RSI' not in df:
         delta = df['close'].diff()
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
@@ -1082,39 +856,20 @@ def core_signal(
     # === Signal Scoring ===
     score = 0.0
 
+    # SMA crossover
     if len(df) >= 2:
         prev = df.iloc[-2]
-        sma_short_prev = prev['SMA_short']
-        sma_long_prev = prev['SMA_long']
-
-        # Only count new crossovers
-        if sma_short > sma_long and sma_short_prev <= sma_long_prev:
+        if sma_short > sma_long and prev['SMA_short'] <= prev['SMA_long']:
             score += filters['SMA_score']
-        elif sma_short < sma_long and sma_short_prev >= sma_long_prev:
+        elif sma_short < sma_long and prev['SMA_short'] >= prev['SMA_long']:
             score -= filters['SMA_score']
 
+    # RSI extremes
     if not pd.isna(rsi):
         if rsi < filters['RSI_oversold']:
             score += filters['RSI_score']
         elif rsi > filters['RSI_overbought']:
             score -= filters['RSI_score']
-
-    # Optional AI Model Contribution
-    if model is not None:
-        try:
-            features = df.select_dtypes(include=[np.number]).tail(1)
-            if not features.empty:
-                pred = model.predict(features)[0]
-                proba = (
-                    model.predict_proba(features)[0]
-                    if hasattr(model, "predict_proba")
-                    else [0.5, 0.5]
-                )
-                ai_prob = float(max(proba))
-                score += filters['AI_score'] * ai_prob * (1 if pred == 1 else -1)
-                log_message(f"🤖 AI signal: {pred}, prob={ai_prob:.2f}")
-        except Exception as e:
-            log_message(f"⚠️ AI model error: {e}")
 
     # === Build Final Signal ===
     threshold = filters['Score_threshold']
@@ -1149,28 +904,26 @@ def core_signal(
     return out
 
 
+
+# ===============================
+# Core Signal Live
+# ===============================
 def core_signal_live(
     last_bar: pd.Series,
     sma_short: float,
     sma_long: float,
     atr: float,
     rsi: float,
+    ticker: str,
+    model=None,
     lookback=60,
     historical_bars: pd.DataFrame = None,
     filters: dict = None,
-    last_trade_time=None,
+    last_trade_time_val=None,
     current_time=None,
-    log_message=print,
-    ticker=None,
-    bars=None
+    log_message=print
 ) -> dict:
-    """
-    Core signal generator for live trading.
-    Score is based only on SMA/RSI/ATR filters.
-    AI model provides additional forecast but does NOT affect score.
-    """
 
-    # --- Default filters ---
     filters = filters or {
         'ATR_threshold': 0.05,
         'SMA_score': 0.25,
@@ -1192,57 +945,38 @@ def core_signal_live(
         'score': 0.0,
         'Risk': 0.0,
         'Reward': 0.0,
-        'PositionSize': 0.0,
-        'AI_signal': None,
-        'AI_prob': None
+        'PositionSize': 0.0
     }
 
     price = last_bar.get('close', np.nan)
     if pd.isna(price) or pd.isna(atr):
         return out
 
-    # --- ATR filter ---
+    # ATR filter
     if atr / price > filters['ATR_threshold']:
         log_message(f"⚠️ High volatility skipped (ATR/Price={atr/price:.2%})")
         return out
 
-    # --- Cooldown check ---
-    if last_trade_time and current_time:
+    # Cooldown check
+    if last_trade_time_val and current_time:
         cooldown = timedelta(minutes=filters['Cooldown_minutes'])
-        if (current_time - last_trade_time) < cooldown:
+        if (current_time - last_trade_time_val) < cooldown:
             return out
 
     # --- Score Calculation (SMA + RSI) ---
     score = 0.0
-
-    # SMA crossover
     if sma_short > sma_long:
         score += filters['SMA_score']
     elif sma_short < sma_long:
         score -= filters['SMA_score']
 
-    # RSI filter
     if rsi < filters['RSI_oversold']:
         score += filters['RSI_score']
     elif rsi > filters['RSI_overbought']:
         score -= filters['RSI_score']
 
-    # --- AI prediction (reference only) ---
-    if bars is not None and len(bars) >= 60:
-        try:
-            ai_signal, ai_conf = ai_predict(bars, ticker, lookback=60)
-            if ai_signal:
-                out['AI_signal'] = ai_signal
-                out['AI_prob'] = ai_conf
-                # optional: log AI reference
-                log_message(f"🤖 AI forecast: {ai_signal}, probability={ai_conf:.2f}")
-                # for debugging, show AI-adjusted score (does NOT change trading signal)
-                debug_score = score + ai_conf / 20
-                log_message(f"AI Score {debug_score:.2f} direction placeholder")
-        except Exception as e:
-            log_message(f"⚠️ AI model error: {e}")
 
-    # --- Final signal based on score ---
+    # Final signal
     threshold = filters['Score_threshold']
     STOP_MULT = filters['STOP_ATR_MULT']
     TP_MULT = filters['TP_ATR_MULT']
@@ -1259,7 +993,6 @@ def core_signal_live(
             Reward=TP_MULT * atr
         )
         log_message(f"📈 LONG | Price={price:.2f} | ATR={atr:.4f} | Score={score:.2f}")
-
     elif score < -threshold:
         out.update(
             signal='SHORT',
@@ -1274,8 +1007,6 @@ def core_signal_live(
         log_message(f"📉 SHORT | Price={price:.2f} | ATR={atr:.4f} | Score={score:.2f}")
 
     return out
-
-
 
 
 #########################################################
@@ -1481,7 +1212,7 @@ def send_message_report(df_results: pd.DataFrame, df_signals: pd.DataFrame, equi
 ############  BACK TESTING LOGIC to find best filter ####
 ############    STARTING         ########################
 #########################################################
-import itertools
+
 
 # Define ranges for filter parameters
 PARAM_GRID = {
@@ -1545,51 +1276,118 @@ def optimize_filters(days=180, metric='Sharpe', model=None):
 # ================================
 # Daily Summary Helper
 # ================================
-def send_daily_summary():
+import matplotlib.pyplot as plt
+import io
+import base64
+
+def post_trading_analysis(tickers):
     """
-    Runs once daily at 4:00 PM EST to summarize all tickers' equity values.
-    Handles both dict and list return types from load_equity_snapshots().
+    Performs end-of-day cleanup, equity updates,
+    backups, and logging.
     """
     try:
-        result = load_equity_snapshots()
+        positions, equity, last_update = load_equity_sheet()
 
-        # Handle (start, end) or single result
-        if isinstance(result, tuple) and len(result) == 2:
-            _, end_equity = result
-        else:
-            end_equity = result
+        # 2️⃣ Update equity sheet with last update timestamp
+        now_iso = datetime.now(EST).isoformat()
+        for t in tickers:
+            save_equity_sheet(t, equity.get(t, 1000), now_iso)
 
-        # If it's a list, convert to a dict with index-based tickers or infer from structure
-        if isinstance(end_equity, list):
-            if all(isinstance(x, dict) and 'Ticker' in x and 'Equity' in x for x in end_equity):
-                # e.g. [{'Ticker': 'AAPL', 'Equity': 10120}, ...]
-                end_equity = {x['Ticker']: x['Equity'] for x in end_equity}
-            else:
-                # fallback if it's just a list of equity values
-                end_equity = {f"T{i+1}": v for i, v in enumerate(end_equity)}
-
-        if not end_equity:
-            log_message("⚠️ No end-of-day equity data found.")
-            send_message("⚠️ No end-of-day equity snapshot found.")
-            return
-
-        total_equity = sum(end_equity.values())
-
-        summary_lines = ["📊 End-of-Day Equity Summary\n"]
-        for t in sorted(end_equity.keys()):
-            summary_lines.append(f"💼 {t}  : {end_equity[t]:.2f}")
-
-        summary_lines.append("\n💰 Total Equity: {:.2f}".format(total_equity))
-
+        # 3️⃣ Generate summary
+        total_equity = sum(equity.values())
+        summary_lines = ["📊 End-of-Day Trading Summary\n"]
+        for t in sorted(equity.keys()):
+            #ai_info = ai_results.get(t, {})
+            summary_lines.append(
+                f"{t}: Equity={equity[t]:.2f} "
+            )
+        summary_lines.append(f"\n💰 Total Equity: {total_equity:.2f}")
         msg = "\n".join(summary_lines)
         send_message(msg)
         log_message(msg)
-        log_message("✅ End-of-day equity summary sent successfully.")
+
+        # 4️⃣ Backup data and models
+        backup_folder = "backup_" + datetime.now().strftime("%Y%m%d")
+        os.makedirs(backup_folder, exist_ok=True)
+        # Save positions and equity
+        pd.DataFrame([{"Ticker": t, "Equity": equity[t], "Position": positions[t]} for t in tickers]) \
+            .to_csv(os.path.join(backup_folder, "positions_equity.csv"), index=False)
+        log_message(f"💾 Backups saved in {backup_folder}")
 
     except Exception as e:
-        log_message(f"❌ Failed to send end-of-day summary: {e}")
-        send_message(f"❌ Failed to send summary: {e}")
+        log_message(f"❌ Failed during post-trading analysis: {e}")
+        send_message(f"❌ Failed post-trading analysis: {e}")
 
+def sanitize_tickers(tickers):
+    """
+    Converts a list of tickers to strings, handling tuples if they exist.
+    """
+    sanitized = []
+    for t in tickers:
+        if isinstance(t, tuple):
+            sanitized.append(str(t[0]).upper().strip())  # take first element of tuple
+        else:
+            sanitized.append(str(t).upper().strip())
+    return sanitized
+
+def load_historical_data(ticker, period="6mo", interval="1d"):
+    """
+    Load historical OHLCV data for a ticker.
+    """
+    try:
+        bars = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
+        if bars.empty:
+            print(f"⚠️ No data found for {ticker}")
+            return None
+        
+        # Keep only relevant columns and convert to lowercase
+        bars = bars[['Open', 'High', 'Low', 'Close', 'Volume']]
+        bars.reset_index(inplace=True)
+        return bars
+
+    except Exception as e:
+        print(f"⚠️ Error loading historical data for {ticker}: {e}")
+        return None
+
+def nightly_job(tickers):
+    """
+    Fully automated nightly routine:
+    1️⃣ Post-trading analysis
+    3️⃣ Equity & last update sheet refresh
+    4️⃣ Data backup
+    5️⃣ Readiness checks for next trading day
+    """
+    log_message("🌙 Starting nightly job...")
+    print(tickers)
+    try:
+        # 1️⃣ Post-trading analysis
+        log_message("📊 Running post-trading analysis...")
+        post_trading_analysis(tickers)
+        tickers = sanitize_tickers(tickers)
+
+        # 3️⃣ Refresh equity sheet
+        log_message("💰 Updating equity sheet...")
+        positions, equity, last_update = load_equity_sheet()
+        now_iso = datetime.now(EST).isoformat()
+        for t in tickers:
+            save_equity_sheet(t, equity.get(t, 1000), now_iso)
+
+        # 4️⃣ Backup all data
+        log_message("💾 Performing backups...")
+        backup_folder = f"backup_{datetime.now().strftime('%Y%m%d')}"
+        os.makedirs(backup_folder, exist_ok=True)
+        pd.DataFrame([{"Ticker": t, "Equity": equity[t], "Position": positions[t]} for t in tickers]) \
+            .to_csv(os.path.join(backup_folder, "positions_equity.csv"), index=False)
+        log_message(f"✅ Backup saved to {backup_folder}")
+
+        # 5️⃣ Readiness check for tomorrow
+        log_message("🔎 Performing readiness checks for tomorrow...")
+
+        log_message("🌙 Nightly job complete. System ready for next trading day!")
+
+    except Exception as e:
+        log_message(f"❌ Nightly job failed: {e}")
+        send_message(f"❌ Nightly job failed: {e}")
 
 ###########################################################################
 ############  POST MATKET DAILY SUMMARY AT 04:00 pm EST ######################
@@ -1609,126 +1407,707 @@ equity = defaultdict(lambda: 1000)
 last_trade_time = defaultdict(lambda: None)
 RISK_PER_TRADE = 0.01       # Starting equity per ticker
 
-EQUITY_WS = "trade_equity"
+EQUITY_WS = "TickerEquity"
 equity_ws = sheet.worksheet(EQUITY_WS)
 
-# ---------------------------
-# Load/Save Equity & Positions
-# ---------------------------
 def load_equity_sheet():
     """
-    Loads tickers, positions, and equity from Google Sheet
+    Loads tickers, positions, equity, and last update time from Google Sheet.
     Returns:
         positions: dict[ticker] -> position info
         equity: dict[ticker] -> total equity
+        last_update: dict[ticker] -> last updated datetime string
     """
     df = pd.DataFrame(equity_ws.get_all_records())
     positions = {}
     equity = {}
-    for _, row in df.iterrows():
-        ticker = row['Ticker']
-        positions[ticker] = eval(row['Position']) if row['Position'] else None
-        equity[ticker] = float(row['Equity']) if 'Equity' in row else 1000
-    return positions, equity
+    last_update = {}
 
-def save_equity_sheet(positions, equity):
+    for _, row in df.iterrows():
+        ticker = row.get("Ticker")
+        if not ticker:
+            continue
+
+        # Parse position safely
+        pos_val = row.get("Position")
+        positions[ticker] = eval(pos_val) if pos_val else None
+
+        # Parse equity safely
+        equity[ticker] = float(row.get("Equity", 1000))
+
+        # Parse last update safely
+        last_update[ticker] = row.get("LastUpdate", "")
+
+    return positions, equity, last_update
+
+
+def save_equity_sheet(ticker, equity, last_update=None):
     """
-    Updates Google Sheet with positions and equity
+    Update or insert a single ticker equity record with timestamp
     """
-    data = []
-    for ticker, pos in positions.items():
-        data.append([ticker, str(pos), equity.get(ticker, 1000)])
-    equity_ws.clear()
-    equity_ws.update([["Ticker", "Position", "Equity"]] + data)
+    try:
+        df = pd.DataFrame(equity_ws.get_all_records())
+
+        # convert datetime to string
+        if isinstance(last_update, datetime):
+            last_update = last_update.isoformat()
+
+        # update existing or append new
+        if ticker in df['Ticker'].values:
+            idx = df.index[df['Ticker'] == ticker][0]
+            equity_ws.update(f"B{idx+2}", [[(equity)]])
+            equity_ws.update(f"C{idx+2}", [[last_update]])
+        else:
+            equity_ws.append_row([ticker, (equity), last_update])
+
+    except Exception as e:
+        print(f"⚠️ Failed to update equity for {ticker}: {e}")
+
+def init_equity(tickers, default_equity=1000):
+    """
+    Initialize equity per ticker from Google Sheet or create missing tickers.
+    Adds a 'LastUpdate' column if not present.
+    Returns:
+        dict[ticker] -> equity value
+    """
+    equity = {}
+
+    if sheet:
+        # Try to open or create the worksheet
+        try:
+            ws = sheet.worksheet("TickerEquity")
+        except gspread.WorksheetNotFound:
+            ws = sheet.add_worksheet(title="TickerEquity", rows="100", cols="4")
+            ws.append_row(["Ticker", "Equity", "LastUpdate"])
+
+        # Fetch existing data
+        existing_records = ws.get_all_records()
+        existing_tickers = [r["Ticker"] for r in existing_records]
+
+        # Initialize or append missing tickers
+        for t in tickers:
+            if t in existing_tickers:
+                # Use existing equity
+                rec = next(r for r in existing_records if r["Ticker"] == t)
+                equity[t] = rec.get("Equity", default_equity)
+            else:
+                ws.append_row([t, default_equity, datetime.now().isoformat()])
+                equity[t] = default_equity
+    else:
+        # Excel fallback
+        file_path = "equity.xlsx"
+        if os.path.exists(file_path):
+            df = pd.read_excel(file_path)
+        else:
+            df = pd.DataFrame(columns=["Ticker", "Equity", "LastUpdate"])
+
+        for t in tickers:
+            if t in df["Ticker"].values:
+                equity[t] = df.loc[df["Ticker"] == t, "Equity"].values[0]
+            else:
+                df = pd.concat(
+                    [
+                        df,
+                        pd.DataFrame(
+                            [{"Ticker": t, "Equity": default_equity, "LastUpdate": datetime.now()}]
+                        ),
+                    ],
+                    ignore_index=True,
+                )
+                equity[t] = default_equity
+        df.to_excel(file_path, index=False)
+
+    return equity
+
 
 # ---------------------------
 # Execute Trade
 # ---------------------------
-def execute_trade(ticker, signal, positions, equity, last_signal):
+def execute_trade(ticker, signal):
+    """
+    Execute a trade based on the signal, update positions, equity, last update,
+    and send detailed Telegram message with reasoning.
+    """
+    global positions, equity, last_trade_time
+
+    now = datetime.now().isoformat()
+
+    # Initialize equity if missing
+    if ticker not in equity:
+        equity[ticker] = 1000
+
     pos = positions.get(ticker)
-    prev_signal = last_signal.get(ticker)
+    risk = signal.get('Risk', 0.0) or 1  # avoid division by zero
+    qty = max(1, int(RISK_PER_TRADE * equity[ticker] / risk))
 
-    # Prevent duplicate trades
-    if signal['signal'] == prev_signal:
-        return
-
-    qty = max(1, int(RISK_PER_TRADE * equity.get(ticker, 1000) / signal['Risk'])) if signal['Risk'] else 1
-    now = datetime.now()
-
-    # Open new trade
+    # --- OPEN TRADE ---
     if pos is None and signal['signal'] in ("LONG", "SHORT"):
-        positions[ticker] = {"entry_price": signal['entry_price'],
-                             "direction": 1 if signal['signal']=='LONG' else -1,
-                             "qty": qty,
-                             "stop": signal['stop'],
-                             "tp": signal['tp']}
-        last_signal[ticker] = signal['signal']
-        msg = f"🟢 Opened {signal['signal']} {ticker} at {signal['entry_price']:.2f} Qty={qty} AI_Signal={signal['AI_signal']} Prob={signal['AI_prob']}"
+        positions[ticker] = {
+            "entry_price": signal['entry_price'],
+            "direction": 1 if signal['signal'] == 'LONG' else -1,
+            "qty": qty,
+            "stop": signal['stop'],
+            "tp": signal['tp']
+        }
+        last_trade_time[ticker] = now
+
+        msg = (
+            f"🟢 Opened {signal['signal']} {ticker}\n"
+            f"Entry: {signal['entry_price']:.2f} | Qty: {qty}\n"
+            f"Stop: {signal['stop']:.2f} | TP: {signal['tp']:.2f}\n"
+            f"Reasoning: SMA_short={'above' if signal['entry_price']>signal['stop'] else 'below'} SMA_long, "
+            f"RSI={signal.get('RSI', 'N/A')}, ATR={signal.get('ATR', 'N/A')}"
+        )
         print(msg)
         send_telegram_safe(msg)
 
-    # Close existing trade
+        log_trade({
+            "Ticker": ticker, "Date": now, "Signal": signal['signal'],
+            "Entry": signal['entry_price'], "Exit": "",
+            "PnL": 0, "Qty": qty, "Equity": equity[ticker]
+        })
+
+        save_equity_sheet(ticker, equity[ticker], now)
+
+    # --- CLOSE TRADE ---
     elif pos is not None:
-        cur_price = signal['entry_price']
-        exit_cond = ((pos['direction']==1 and (cur_price <= pos['stop'] or cur_price >= pos['tp'])) or
-                     (pos['direction']==-1 and (cur_price >= pos['stop'] or cur_price <= pos['tp'])))
-        if exit_cond:
-            pnl = (cur_price - pos['entry_price']) * pos['direction'] * pos['qty']
-            equity[ticker] += pnl
-            msg = f"🔴 Closed {ticker} | PnL={pnl:.2f} | New Equity={equity[ticker]:.2f} AI_Signal={signal['AI_signal']} Prob={signal['AI_prob']}"
-            print(msg)
-            send_telegram_safe(msg)
-            positions[ticker] = None
-            last_signal[ticker] = None
+        # Determine actual exit price
+        exit_price = signal.get('close', signal['entry_price'])
 
-    # Save updated positions/equity to Google Sheet
-    save_equity_sheet(positions, equity)
-
-
-# ================================
-# Live Trading Loop
-# ================================
-def live_trading_session():
-    """
-    Runs during market hours (9:30 AM–4:00 PM EST).
-    """
-    log_message("🚀 Starting live paper trading loop...")
-    positions, equity = load_equity_sheet()
-    last_signal = defaultdict(lambda: None)
-
-    for ticker in tickers:
-        last_bar, bars = fetch_last_bar(ticker)
-        if last_bar is None:
-            continue
-
-        sma_short = last_bar['SMA_short']
-        sma_long = last_bar['SMA_long']
-        atr = last_bar['ATR']
-        rsi = last_bar['RSI']
-
-        if np.isnan([sma_short, sma_long, atr, rsi]).any():
-            continue
-
-        ai_model, _ = load_ai_model(ticker)
-
-        signal = core_signal_live(
-            last_bar=last_bar,
-            sma_short=sma_short,
-            sma_long=sma_long,
-            atr=atr,
-            rsi=rsi,
-            model=ai_model,
-            lookback=60,
-            historical_bars=bars,
-            filters=None,
-            last_trade_time=None,
-            current_time=datetime.now(),
-            log_message=logging.info
+        # Check exit condition
+        exit_cond = (
+            (pos['direction'] == 1 and (exit_price <= pos['stop'] or exit_price >= pos['tp'])) or
+            (pos['direction'] == -1 and (exit_price >= pos['stop'] or exit_price <= pos['tp']))
         )
 
-        execute_trade(ticker, signal, positions, equity, last_signal)
-    log_message("✅ Trading session completed and equity snapshot saved.")
+        if exit_cond:
+            pnl = (exit_price - pos['entry_price']) * pos['direction'] * pos['qty']
+            equity[ticker] += pnl
 
+            msg = (
+                f"🔴 Closed {ticker}\n"
+                f"Entry: {pos['entry_price']:.2f} | Exit: {exit_price:.2f} | Qty: {pos['qty']}\n"
+                f"PnL: {pnl:.2f} | New Equity: {equity[ticker]:.2f}\n"
+                f"Reasoning: Stop {'hit' if (exit_price <= pos['stop'] if pos['direction']==1 else exit_price >= pos['stop']) else 'target reached'}"
+            )
+            print(msg)
+            send_telegram_safe(msg)
+
+            positions[ticker] = None
+            log_trade({
+                "Ticker": ticker, "Date": now, "Signal": "CLOSE",
+                "Entry": pos['entry_price'], "Exit": exit_price,
+                "PnL": pnl, "Qty": pos['qty'], "Equity": equity[ticker]
+            })
+
+            save_equity_sheet(ticker, equity[ticker], now)
+
+
+###########################################################
+#################################################
+
+
+#################################################
+##############################################################
+
+
+# Create client
+def create_alpaca_client():
+    if not ALPACA_KEY or not ALPACA_SECRET:
+        log_message("❌ Alpaca API keys not found in environment. Order execution disabled.")
+        return None
+    try:
+        client = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, ALPACA_BASE_URL, api_version='v2')
+        account = client.get_account()
+        log_message(f"🔌 Connected to Alpaca (paper={ALPACA_BASE_URL.endswith('paper-api.alpaca.markets')}). Account status: {account.status}")
+        return client
+    except Exception as e:
+        log_message(f"⚠️ Error creating Alpaca client: {e}")
+        return None
+
+ALPACA = create_alpaca_client()
+
+# Utility: is market open
+def is_market_open(client) -> bool:
+    try:
+        clock = client.get_clock()
+        return clock.is_open
+    except Exception as e:
+        log_message(f"⚠️ Could not fetch Alpaca clock: {e}. Assuming market closed.")
+        return False
+
+# Utility: get current buying power / equity
+def get_account_equity(client) -> Optional[float]:
+    try:
+        acct = client.get_account()
+        # Use cash or equity depending on margin
+        bp = float(acct.cash) if acct.cash is not None else float(acct.equity)
+        return bp
+    except Exception as e:
+        log_message(f"⚠️ Could not fetch account equity: {e}")
+        return None
+
+# Helper: check existing open orders for ticker
+def has_open_order_for_symbol(client, symbol: str) -> bool:
+    try:
+        open_orders = client.list_orders(status='open', symbols=[symbol])
+        return len(open_orders) > 0
+    except Exception as e:
+        # fallback: return False but log
+        log_message(f"⚠️ Could not check open orders for {symbol}: {e}")
+        return False
+
+# Place an order (bracket order with stop loss & take profit)
+def place_bracket_order(
+    client,
+    symbol: str,
+    side: str,                 # 'buy' or 'sell' (sell for short)
+    qty: int,
+    limit_price: Optional[float] = None,
+    stop_loss_price: Optional[float] = None,
+    take_profit_price: Optional[float] = None,
+    time_in_force: str = "day"
+):
+    """
+    Submits a bracket order:
+    - 'side' should be 'buy' for long entries, 'sell' for short entries.
+    """
+    if client is None:
+        log_message("⚠️ Alpaca client not initialized; cannot place orders.")
+        return None
+
+    if qty < 1:
+        log_message(f"⚠️ Computed qty < 1 for {symbol}; skipping order.")
+        return None
+
+    if has_open_order_for_symbol(client, symbol):
+        log_message(f"⚠️ There is already an open order for {symbol}; skipping to avoid duplicates.")
+        return None
+
+    try:
+        order_params = {
+            "symbol": symbol,
+            "qty": qty,
+            "side": side,
+            "type": "market" if limit_price is None else "limit",
+            "time_in_force": time_in_force,
+            "order_class": "bracket",
+            "take_profit": {"limit_price": str(take_profit_price)} if take_profit_price is not None else None,
+            "stop_loss": {"stop_price": str(stop_loss_price)} if stop_loss_price is not None else None
+        }
+
+        # Remove None keys (Alpaca will reject if None present)
+        order_params = {k: v for k, v in order_params.items() if v is not None}
+
+        log_message(f"➡️ Submitting bracket order: {order_params}")
+        submitted = client.submit_order(**order_params)
+        log_message(f"✅ Order submitted for {symbol}: id={submitted.id} side={side} qty={qty}")
+        return submitted
+    except Exception as e:
+        log_message(f"❌ Error submitting order for {symbol}: {e}")
+        return None
+
+# Position sizing: risk-based using ATR
+def compute_position_size(equity: float, risk_per_trade: float, atr: float, entry_price: float, atr_multiplier: float = 1.0) -> int:
+    """
+    equity: total account cash/equity (float)
+    risk_per_trade: fraction of equity to risk per trade (e.g. 0.01)
+    atr: current ATR (in price units)
+    entry_price: current price of the symbol
+    atr_multiplier: multiple of ATR to use as risk per share (e.g. 1*ATR or 1.5*ATR)
+    Returns integer share qty (floor), minimum 0.
+    """
+    if equity is None or equity <= 0:
+        return 0
+    if atr is None or atr <= 0:
+        return 0
+
+    risk_dollars = equity * risk_per_trade
+    risk_per_share = atr * atr_multiplier
+    if risk_per_share <= 0:
+        return 0
+
+    qty = math.floor(risk_dollars / risk_per_share)
+    # limit by buying power relative to entry price (conservative)
+    max_affordable = math.floor(equity / entry_price) if entry_price > 0 else qty
+    qty = max(0, min(qty, max_affordable))
+    return qty
+
+# Integrate order execution into live loop
+# Add these config params near other top-level constants
+RISK_PER_TRADE = 0.01        # 1% of equity risk per trade
+ATR_MULTIPLIER_STOP = 1.5    # stop = entry - ATR*1.5 (for longs)
+ATR_MULTIPLIER_TP = 3.0      # take-profit distance multiplier (e.g. 3x ATR)
+MIN_ENTRY_QTY = 1            # minimum shares to place an order
+COOLDOWN_SECONDS = 60 * 5    # optional per-ticker cooldown to avoid rapid reorders
+
+_last_order_time = defaultdict(lambda: None)  # track last order time per ticker
+
+def execute_signal_via_alpaca(ticker: str, signal: str, last_bar: dict, model=None):
+    """
+    Given a BUY/SELL signal, compute qty and place a bracket order via Alpaca.
+    """
+    client = ALPACA
+    if client is None:
+        log_message("⚠️ Alpaca client not configured; skipping execution.")
+        return None
+
+    # Only trade while market open
+    if not is_market_open(client):
+        log_message("🕒 Market is closed; skipping order placement.")
+        return None
+
+    # Prevent rapid reorders per ticker
+    last_time = _last_order_time.get(ticker)
+    if last_time is not None:
+        if (datetime.now(EST) - last_time).total_seconds() < COOLDOWN_SECONDS:
+            log_message(f"⏳ Cooldown active for {ticker}, skipping signal.")
+            return None
+
+    # Account equity / buying power for sizing
+    equity = get_account_equity(client)
+    if equity is None:
+        log_message("⚠️ No account equity available; skipping order.")
+        return None
+
+    # Extract price and ATR from last_bar (ensure keys match your source)
+    entry_price = last_bar.get("close") or last_bar.get("close") or last_bar.get("price")
+    atr = last_bar.get("ATR")
+    if entry_price is None or atr is None:
+        log_message(f"⚠️ Missing entry price or ATR for {ticker}; cannot size position.")
+        return None
+
+    # Compute qty
+    if signal.upper() == "BUY":
+        qty = compute_position_size(equity, RISK_PER_TRADE, atr, entry_price, ATR_MULTIPLIER_STOP)
+        side = "buy"
+        stop_price = max(0.01, entry_price - atr * ATR_MULTIPLIER_STOP)
+        take_profit_price = entry_price + atr * ATR_MULTIPLIER_TP
+    elif signal.upper() == "SELL":
+        # For SELL signals, attempt a short if account allows margin.
+        qty = compute_position_size(equity, RISK_PER_TRADE, atr, entry_price, ATR_MULTIPLIER_STOP)
+        side = "sell"   # a sell order will short if position not owned and account allows
+        stop_price = min(999999, entry_price + atr * ATR_MULTIPLIER_STOP)
+        take_profit_price = entry_price - atr * ATR_MULTIPLIER_TP
+    else:
+        log_message(f"⚠️ Unknown signal '{signal}' for {ticker}")
+        return None
+
+    if qty < MIN_ENTRY_QTY:
+        log_message(f"⚠️ Computed qty for {ticker} < {MIN_ENTRY_QTY} (qty={qty}); skipping.")
+        return None
+
+    # Place bracket order (market entry + TP & SL)
+    order = place_bracket_order(
+        client=client,
+        symbol=ticker,
+        side=side,
+        qty=qty,
+        limit_price=None,  # use market entry
+        stop_loss_price=round(stop_price, 2),
+        take_profit_price=round(take_profit_price, 2),
+        time_in_force="day"
+    )
+
+    if order:
+        _last_order_time[ticker] = datetime.now(EST)
+    return order
+###################################################################################################
+##################   ADDITONAL FUNC FOR LIVE TRADING MONITORING    ################################
+######################    STARTTED                   ##############################################
+###################################################################################################
+
+# -----------------------------
+# DATA FETCHING
+# -----------------------------
+def fetch_intraday_data(ticker):
+    try:
+        file_path = f"data/{ticker}_latest.csv"
+
+        if os.path.exists(file_path):
+            bars = pd.read_csv(file_path)
+        else:
+            print(f"⚠️ No data file found for {ticker}, fetching fresh data...")
+            bars = get_bars_cached(ticker)  # Replace with your own fetch function
+        return bars
+    except Exception as e:
+        send_message(f"Error fetching data for {ticker}: {e}")
+        return None
+
+# -----------------------------
+# VOLUME SPIKE DETECTION
+# -----------------------------
+def check_volume_spike(df):
+    if df is None or len(df) < 20:
+        return False
+    avg_vol = df['volume'].rolling(20).mean().iloc[-1]
+    current_vol = df['volume'].iloc[-1]
+    return current_vol > 2 * avg_vol
+
+# -----------------------------
+# NEWS / SENTIMENT
+# -----------------------------
+def get_news_sentiment(ticker):
+    url = f"https://newsapi.org/v2/everything?q={ticker}&apiKey={NEWS_API_KEY}"
+    try:
+        resp = requests.get(url).json()
+        articles = resp.get('articles', [])
+        sentiment = 0
+        positive_words = ["gain", "beat", "strong", "up"]
+        negative_words = ["loss", "miss", "weak", "down"]
+        for article in articles[:5]:
+            content = (article.get('title', '') + article.get('description', '')).lower()
+            sentiment += sum(1 for w in positive_words if w in content)
+            sentiment -= sum(1 for w in negative_words if w in content)
+        return sentiment / 5
+    except Exception as e:
+        send_message(f"Error fetching news for {ticker}: {e}")
+        return 0
+
+
+
+
+
+#################################################################
+##################   LIVE TRADING MONITORING    ################################
+######################    STARTTED                   ############################
+#################################################################
+# -------------------------------------------------------
+# Example integration point in your live_trading_session:
+# after obtaining signal from core_signal_live(), call:
+#
+#    if signal is not None:
+#        execute_signal_via_alpaca(ticker, signal, last_bar, model=ai_model)
+#
+# -------------------------------------------------------
+def live_trading_session():
+    EST = pytz.timezone("US/Eastern")
+    init_equity(tickers)
+   
+    now_est = datetime.now(EST)
+
+    # Stop the bot at or after 4:30 PM EST
+    market_close = now_est.replace(hour=16, minute=30, second=0, microsecond=0)
+    if now_est >= market_close:
+        log_message("🛑 Market closed — ending live trading loop.")
+        return
+
+    log_message("🚀 Starting live paper trading loop...")
+
+    try:
+        positions, equity, last_update = load_equity_sheet()
+        last_signal = defaultdict(lambda: None)
+
+        for ticker in tickers:
+            try:
+                # Fetch latest bars
+                last_bar, bars = fetch_last_bar(ticker)
+                df = fetch_intraday_data(ticker)
+                # ✅ Check if bars are missing or empty
+                if bars is None or len(bars) == 0 or last_bar is None:
+                    log_message(f"⚠️ No bars returned or invalid data for {ticker}")
+                    continue
+
+                # ✅ Extract technical indicators safely
+                sma_short = last_bar.get('SMA_short')
+                sma_long = last_bar.get('SMA_long')
+                atr = last_bar.get('ATR')
+                rsi = last_bar.get('RSI')
+
+                # ✅ Skip tickers with incomplete or NaN data
+                if any(x is None or np.isnan(x) for x in [sma_short, sma_long, atr, rsi]):
+                    log_message(f"⚠️ Missing indicator values for {ticker}, skipping.")
+                    continue
+
+                bars = calculate_indicators(bars)
+                last_bar = bars.iloc[-1]
+                signal = core_signal_live(
+                    last_bar=last_bar,
+                    sma_short=last_bar['SMA_short'],
+                    sma_long=last_bar['SMA_long'],
+                    atr=last_bar['ATR'],
+                    rsi=last_bar['RSI'],
+                    ticker=ticker,
+                    historical_bars=bars,
+                    current_time=datetime.now()
+                    )
+
+                if signal['signal'] != 'FLAT':
+                    # Prevent duplicate trades
+                    if positions[ticker] is None or positions[ticker]['entry_price'] != signal['entry_price']:
+                        execute_trade(ticker, signal)
+
+                    # 🚀 Execute trade via Alpaca
+                # if signal is not None and signal in ["BUY", "SELL"]:
+                    #   execute_signal_via_alpaca(
+                    #      ticker=ticker,
+                    #       signal=signal,
+                    #       last_bar=last_bar,
+                    #       model=ai_model
+                    #   )
+                
+                    # -------------------------
+                    # Volume spike detection
+                    # -------------------------
+                if check_volume_spike(df):
+                    send_message(f"🔹 Volume spike detected for {ticker}")
+
+                # -------------------------
+                # News / sentiment
+                # -------------------------
+                sentiment = get_news_sentiment(ticker)
+                if sentiment < -0.5:
+                    send_message(f"⚠️ Negative sentiment for {ticker}, consider avoiding trades")
+
+                   
+            except Exception as inner_e:
+                log_message(f"⚠️ Error processing {ticker}: {inner_e}")
+                continue
+
+    except Exception as e:
+        log_message(f"⚠️ Error during live loop: {e}")
+   
+#####################################################################################
+############### News Integration and Analysis #######################################
+#####################################################################################
+
+# -------------------------------------------------
+# Yahoo Finance RSS Fetch
+# -------------------------------------------------
+def fetch_yahoo_news(limit=20):
+    """Fetch latest Yahoo Finance news from RSS."""
+    feed = feedparser.parse(YAHOO_NEWS_FEED)
+    news_items = []
+    for entry in feed.entries[:limit]:
+        news_items.append({
+            "title": entry.title,
+            "link": entry.link,
+            "summary": entry.get("summary", ""),
+            "published": entry.get("published", ""),
+        })
+    return news_items
+
+
+# -------------------------------------------------
+# Utility functions
+# -------------------------------------------------
+def extract_tickers_from_text(text):
+    """Extract ticker symbols from headline/summary text."""
+    tickers = set()
+    tickers.update(re.findall(r"\(([A-Z]{1,5})\)", text))
+    tickers.update(re.findall(r"/quote/([A-Z]{1,5})", text))
+    tickers.update(re.findall(r"\b([A-Z]{2,5})\b", text))
+    # filter noise
+    blacklist = {"THE", "AND", "FOR", "WITH", "FROM", "NASDAQ", "NYSE", "ETF", "WALL", "STREET"}
+    return {t for t in tickers if t.isupper() and 1 < len(t) <= 5 and t not in blacklist}
+
+
+def get_price(ticker):
+    """Fetch current price from Yahoo Finance."""
+    try:
+        url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={ticker}"
+        resp = requests.get(url, timeout=5)
+        data = resp.json()
+        return data["quoteResponse"]["result"][0]["regularMarketPrice"]
+    except Exception:
+        return None
+
+
+def load_sent_cache():
+    if os.path.exists(CACHE_FILE):
+        with open(CACHE_FILE, "r") as f:
+            return json.load(f)
+    return {"sent_ids": []}
+
+
+def save_sent_cache(cache):
+    with open(CACHE_FILE, "w") as f:
+        json.dump(cache, f)
+
+
+def send_to_telegram(message: str):
+    """Send formatted message to Telegram chat."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
+    r = requests.post(url, json=payload, timeout=10)
+    if not r.ok:
+        print("❌ Telegram send failed:", r.text)
+
+
+# -------------------------------------------------
+# News Formatting and Summary
+# -------------------------------------------------
+def format_news_item(n):
+    """Format one news item into a Telegram-friendly string."""
+    sent = n["sentiment"]
+    emoji = "🟢" if sent > 0.25 else "🔴" if sent < -0.25 else "⚪"
+
+    tickers_text = ""
+    if n["tickers"]:
+        t_list = []
+        for t in n["tickers"]:
+            price = get_price(t)
+            if price:
+                t_list.append(f"{t} (${price:.2f})")
+            else:
+                t_list.append(t)
+        tickers_text = " | ".join(t_list)
+
+    return f"{emoji} <a href='{n['link']}'>{n['title']}</a>\n🧩 {tickers_text}\n"
+
+
+def generate_market_mood_summary(news_items):
+    """Generate a short summary like '6 bullish, 3 bearish, 2 neutral'."""
+    bullish = sum(1 for n in news_items if n["sentiment"] > 0.25)
+    bearish = sum(1 for n in news_items if n["sentiment"] < -0.25)
+    neutral = len(news_items) - bullish - bearish
+    return f"📊 <b>Market Mood:</b> 🟢 {bullish} bullish | 🔴 {bearish} bearish | ⚪ {neutral} neutral\n"
+
+def analyse_news_daily():
+    cache = load_sent_cache()
+    sent_ids = set(cache.get("sent_ids", []))
+    news_items = fetch_yahoo_news(limit=20)
+
+    new_msgs = []
+    for n in news_items:
+        uid = n["link"]
+        if uid in sent_ids:
+            continue  # skip repeated news
+
+        # sentiment
+        full_text = f"{n['title']} {n['summary']}"
+        sent_score = analyzer.polarity_scores(full_text)["compound"]
+
+        # extract tickers
+        tickers = extract_tickers_from_text(full_text)
+
+        n["sentiment"] = sent_score
+        n["tickers"] = list(tickers)
+        new_msgs.append(n)
+        sent_ids.add(uid)
+
+    if not new_msgs:
+        print("✅ No new news to send.")
+        return
+
+    # Market mood summary
+    summary_line = generate_market_mood_summary(new_msgs)
+
+    # Format all messages
+    msg = "<b>📰 Latest Market News (Yahoo Finance)</b>\n"
+    msg += summary_line + "\n"
+    for n in new_msgs[:8]:
+        msg += format_news_item(n)
+    msg += f"\n⏰ Updated: {time.strftime('%Y-%m-%d %H:%M EST', time.gmtime())}"
+
+    send_to_telegram(msg)
+    print(f"✅ Sent {len(new_msgs)} new articles.")
+    save_sent_cache({"sent_ids": list(sent_ids)})
 
 # ================================
 # Entrypoint
@@ -1751,7 +2130,15 @@ if __name__ == "__main__":
             send_message(f"❌ Live trading error: {e}")
 
     elif mode == "analysis":
-        send_daily_summary()
+        nightly_job(tickers)
+
+    elif mode == "backtest":
+        best_filters = optimize_filters()
+        print("Best filters for live trading:", best_filters)
+    
+    elif mode == "news":
+        analyse_news_daily()
+
 
     elif mode == "backtest":
         best_filters = optimize_filters()
